@@ -1,4 +1,5 @@
 mod common;
+use common::{block_on, ws};
 use std::{
   net::TcpListener,
   sync::{
@@ -30,6 +31,7 @@ fn balance_least_connections() {
     for i in 0..4 {
       let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
       let server = TcpListener::bind(format!("127.0.0.1:206{d}{i}", d = 5 + p)).unwrap();
+
       thread::spawn(move || {
         for stream in server.incoming() {
           let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
@@ -64,38 +66,37 @@ fn balance_least_connections() {
 
     launch!("balance-least-connections.yml");
 
-    // clients
-    for i in 1..=10 {
-      for j in 1..=4 {
-        thread::spawn(move || {
-          thread::sleep(Duration::from_millis(50 * i * j));
-          let uri = format!("ws://127.0.0.1:2060{p}/");
-          let _ws = tungstenite::client::connect(uri).unwrap().0;
-          loop {
-            // ws.send("message".into()).unwrap();
-            thread::sleep(Duration::from_millis(6000));
-          }
-        });
+    block_on(async move {
+      // clients
+      for i in 1..=10 {
+        for j in 1..=4 {
+          tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50 * i * j)).await;
+            let ws = ws(&format!("ws://127.0.0.1:2060{p}/")).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(5000)).await;
+            drop(ws);
+          });
+        }
       }
-    }
 
-    thread::sleep(Duration::from_millis(3000));
+      thread::sleep(Duration::from_millis(3000));
 
-    macro_rules! check {
-      ($e:ident) => {
-        let v = $e.load(Ordering::SeqCst);
-        assert_eq!(v, 10, "{} is {v}", stringify!($e));
-      };
-    }
+      macro_rules! check {
+        ($e:ident) => {
+          let v = $e.load(Ordering::SeqCst);
+          assert_eq!(v, 10, "{} is {v}", stringify!($e));
+        };
+      }
 
-    dbg!(s0.load(Ordering::SeqCst));
-    dbg!(s1.load(Ordering::SeqCst));
-    dbg!(s2.load(Ordering::SeqCst));
-    dbg!(s3.load(Ordering::SeqCst));
+      dbg!(s0.load(Ordering::SeqCst));
+      dbg!(s1.load(Ordering::SeqCst));
+      dbg!(s2.load(Ordering::SeqCst));
+      dbg!(s3.load(Ordering::SeqCst));
 
-    check!(s0);
-    check!(s1);
-    check!(s2);
-    check!(s3);
+      check!(s0);
+      check!(s1);
+      check!(s2);
+      check!(s3);
+    });
   }
 }
