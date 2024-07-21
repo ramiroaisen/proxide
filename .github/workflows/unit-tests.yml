@@ -3,9 +3,21 @@ name: unit-tests
 on: 
   push:
     branches: [ main ]
-  
+    paths:
+      - src/**
+      - tests/**
+      - patches/**
+      - Cargo.toml
+      - Cargo.lock
+
   pull_request:
     branches: [ main ]
+    paths:
+      - src/**
+      - tests/**
+      - patches/**
+      - Cargo.toml
+      - Cargo.lock
 
 env:
   CARGO_TERM_COLOR: always
