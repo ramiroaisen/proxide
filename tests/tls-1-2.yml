@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 23970
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      return:
+        status: 200
+        response_headers:
+          - [ x-test, tls-version ]

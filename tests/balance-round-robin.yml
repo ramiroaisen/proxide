@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=../config.schema.json
+
+stream:
+  apps:
+    - listen:
+        - addr: 20301
+      proxy:
+        balance: round-robin
+        upstream:
+          - origin: tcp://127.0.0.1:20350
+          - origin: tcp://127.0.0.1:20351
+          - origin: tcp://127.0.0.1:20352
+          - origin: tcp://127.0.0.1:20353
+
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20300
+      proxy:
+        balance: round-robin
+        upstream:
+          - base_url: http://127.0.0.1:20350
+          - base_url: http://127.0.0.1:20351
+          - base_url: http://127.0.0.1:20352
+          - base_url: http://127.0.0.1:20353
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20350
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-upstream, "0" ]
+    
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20351
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-upstream, "1" ]
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20352
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-upstream, "2" ]
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20353
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-upstream, "3" ]

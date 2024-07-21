@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=../config.schema.json
+stream:
+
+  apps:
+    # tcp - tcp
+    - listen:
+        - addr: 21200
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:21250
+
+    # tcp - ssl
+    - listen:
+        - addr: 21201
+      proxy:
+        upstream:
+          - origin: ssl://127.0.0.1:21251
+            danger_accept_invalid_certs: true
+
+    # ssl - tcp
+    - listen:
+      - addr: 21202
+        ssl:
+          cert: cert/self-signed-cert.pem
+          key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:21250
+
+    # ssl - ssl
+    - listen:
+      - addr: 21203
+        ssl:
+          cert: cert/self-signed-cert.pem
+          key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: ssl://127.0.0.1:21251
+            danger_accept_invalid_certs: true
+
+http:
+  apps: 
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21250
+        - addr: 21251
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-request-uri, "${request_uri}" ]
+          - [ x-scheme, "${scheme}" ]

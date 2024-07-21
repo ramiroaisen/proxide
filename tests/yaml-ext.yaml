@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+  apps: 
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 24200
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-test, yaml-ext ]

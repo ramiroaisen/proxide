@@ -1,0 +1,6 @@
+# the tokio/tracing optional feature needs the tokio_unstable flag
+[build]
+rustflags = ["--cfg", "tokio_unstable"]
+
+[test]
+rustflags = ["--cfg", "tokio_unstable"]

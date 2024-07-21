@@ -1,0 +1,78 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+    
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21600
+      when:
+        - match:
+            path: { exact: /balance-round-robin }
+          proxy:
+            balance: round-robin
+            response_headers:
+              - [ x-balance, round-robin ]
+            upstream:
+              - base_url: http://127.0.0.1:21650
+              - base_url: http://127.0.0.1:21651
+              - base_url: http://127.0.0.1:21652
+              - base_url: http://127.0.0.1:21653
+
+        - match:
+            path: { exact: /balance-random }
+          proxy:
+            balance: random
+            response_headers:
+              - [ x-balance, random ]
+            upstream:
+              - base_url: http://127.0.0.1:21650
+              - base_url: http://127.0.0.1:21651
+              - base_url: http://127.0.0.1:21652
+              - base_url: http://127.0.0.1:21653
+
+        - match:
+            path: { exact: /balance-ip-hash }
+          proxy:
+            balance: ip-hash
+            response_headers:
+              - [ x-balance, ip-hash ]
+            upstream:
+              - base_url: http://127.0.0.1:21650
+              - base_url: http://127.0.0.1:21651
+              - base_url: http://127.0.0.1:21652
+              - base_url: http://127.0.0.1:21653
+
+        - match:
+            path: { exact: /balance-least-connections }
+          proxy:
+            balance: least-connections
+            response_headers:
+              - [ x-balance, least-connections ]
+            upstream:
+              - base_url: http://127.0.0.1:21650
+              - base_url: http://127.0.0.1:21651
+              - base_url: http://127.0.0.1:21652
+              - base_url: http://127.0.0.1:21653
+   
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21652
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-test, upstream-down ]
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21653
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-test, upstream-down ]

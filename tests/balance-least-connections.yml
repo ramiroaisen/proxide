@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../config.schema.json
+
+stream:
+  apps:
+    - listen:
+        - addr: 20601
+      proxy:
+        balance: least-connections
+        upstream:
+          - origin: tcp://127.0.0.1:20660
+          - origin: tcp://127.0.0.1:20661
+          - origin: tcp://127.0.0.1:20662
+          - origin: tcp://127.0.0.1:20663
+
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20600
+      proxy:
+        balance: least-connections
+        upstream:
+          - base_url: http://127.0.0.1:20650
+          - base_url: http://127.0.0.1:20651
+          - base_url: http://127.0.0.1:20652
+          - base_url: http://127.0.0.1:20653

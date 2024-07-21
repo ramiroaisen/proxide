@@ -1,0 +1,210 @@
+# yaml-language-server: $schema=../config.schema.json
+
+stream:
+  apps:
+
+    #################################### XX => v1
+    - listen: 
+        # tcp => tcp => http - v1 - v1
+        - addr: 22500
+        # ssl => tcp => http - v1 - v1
+        - addr: 22501
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:22550
+            send_proxy_protocol: v1
+
+    - listen:
+        # tcp => tcp => http - v2 - v1
+        - addr: 22502
+        # ssl => tcp => http - v2 - v1
+        - addr: 22503
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:22550
+            send_proxy_protocol: v2
+
+
+    - listen:
+        # tcp => ssl => http - v1 - v1
+        - addr: 22504
+        # ssl => ssl => http - v1 - v1
+        - addr: 22505
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tls://127.0.0.1:22551
+            danger_accept_invalid_certs: true
+            send_proxy_protocol: v1
+
+    - listen:
+        # tcp => ssl => http - v2 - v1
+        - addr: 22506
+        # ssl => ssl => http - v2 - v1
+        - addr: 22507
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tls://127.0.0.1:22551
+            danger_accept_invalid_certs: true
+            send_proxy_protocol: v2
+
+    #################################### XX => v2
+    - listen: 
+        # tcp => tcp => http - v1 - v2
+        - addr: 22510
+        # ssl => tcp => http - v1 - v2
+        - addr: 22511
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:22552
+            send_proxy_protocol: v1
+
+    - listen:
+        # tcp => tcp => http - v2 - v2
+        - addr: 22512
+        # ssl => tcp => http - v2 - v2
+        - addr: 22513
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:22552
+            send_proxy_protocol: v2
+
+
+    - listen:
+        # tcp => ssl => http - v1 - v2
+        - addr: 22514
+        # ssl => ssl => http - v1 - v2
+        - addr: 22515
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tls://127.0.0.1:22553
+            danger_accept_invalid_certs: true
+            send_proxy_protocol: v1
+
+    - listen:
+        # tcp => ssl => http - v2 - v2
+        - addr: 22516
+        # ssl => ssl => http - v2 - v2
+        - addr: 22517
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tls://127.0.0.1:22553
+            danger_accept_invalid_certs: true
+            send_proxy_protocol: v2
+
+
+    - listen:
+        # tcp => http - v1
+        - addr: 22550
+          expect_proxy_protocol: any-version
+        # ssl => http - v1
+        - addr: 22551
+          expect_proxy_protocol: any-version
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          # http
+          - origin: tcp://127.0.0.1:22560
+            send_proxy_protocol: v1
+
+    - listen:
+        # tcp => http - v2
+        - addr: 22552
+          expect_proxy_protocol: any-version
+        # ssl => http - v2
+        - addr: 22553
+          expect_proxy_protocol: any-version
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:22560
+            send_proxy_protocol: v2
+http:
+  
+  apps:
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 22530
+        - addr: 22531
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      when: 
+        - match:
+            path: { exact: /v1/http }
+          proxy:
+            upstream:
+              - base_url: http://127.0.0.1:22560
+                send_proxy_protocol: v1
+
+        - match:
+            path: { exact: /v1/https }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:22561
+                danger_accept_invalid_certs: true
+                send_proxy_protocol: v1
+
+        - match:
+            path: { exact: /v2/http }
+          proxy:
+            upstream:
+              - base_url: http://127.0.0.1:22560
+                send_proxy_protocol: v2
+
+        - match:
+            path: { exact: /v2/https }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:22561
+                danger_accept_invalid_certs: true
+                send_proxy_protocol: v2
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 22560
+          expect_proxy_protocol: any-version
+        - addr: 22561
+          expect_proxy_protocol: any-version
+          ssl: 
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-test, proxy-protocol ]
+          - [ x-remote-ip, "${remote_ip}" ]
+          - [ x-proxy-protocol-remote-ip, "${proxy_protocol_remote_ip}" ]
+          - [ x-connection-remote-ip, "${connection_remote_ip}" ]
+     

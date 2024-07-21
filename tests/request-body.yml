@@ -1,0 +1,20 @@
+http:
+  apps: 
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 23800
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:23850
+
+    # - server_names:
+    #     - regex: .*
+    #   listen:
+    #     - addr: 23850
+    #   return:
+    #     status: 200
+    #     response_headers:
+    #       - [ content-type, text/plain ]
+    #       - [ x-test, request-body ]
+    #       - [ x-method, "${method}" ]

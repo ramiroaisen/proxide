@@ -1,0 +1,179 @@
+# yaml-language-server: $schema=./config.schema.json
+## the above line provides autocompletion for the config file in VSCode and potentially other editors
+## you have to install the YAML extension by Red Hat
+## to generate the schema run `proxide generate-config-schema --output config.schema.json`
+
+## this is a configuration example for the proxide proxy server.
+
+## required, proxide will write the pid of the process to this file on startup
+## relative to cwd
+pidfile: run/proxide.pid
+
+## log level
+# log_level: info # off, error, warn, info (default), debug
+
+## access log file (default: None) relative to cwd
+# access_log:
+#   path: log/access.log
+#   max_size_mb: 20
+#   retain: 3
+
+## client log file (default: None) relative to cwd
+# client_log:
+#  path: log/client.log
+#  max_size_mb: 20
+#  retain: 3
+
+http: 
+  ## compression levels are 1-9 for gzip/br/deflate and 1-19 for zstd
+  ## setting an empty compression array will disable compression
+  ## this can also be specified at the app or upstream level
+  ## the following are the default
+  # compression:
+  #   - algo: zstd
+  #     level: 1 
+  #   - algo: br
+  #     level: 1
+  #   - algo: gzip
+  #     level: 9
+  #   - algo: deflate
+  #     level: 9
+
+  ## default balance for http upstreams
+  ## this can also be specified at the app handle level
+  # balance: round-robin # round-robin (default) / random / ip-hash / least-connections
+
+  ## http retry options, this can also be specified at the app level
+  ## default number of retries for http requests
+  # retries: 10
+
+  ## default backoff for retry http requests, this can also be specified at the app level
+  # retry_backoff:
+  #   type: exponential
+  #   exponent_base: 1.5
+  #   delay_base: 0.1s
+  #   delay_max: 2s
+  ## alternatively you can use a constant backoff
+  # retry_backoff:
+  #   type: constant
+  #   delay: 1s
+
+  ## this headers will be sent with every response
+  ## you can also specify this at the app or upstream level
+  ## to remove a header specify an empty string as value
+  # response_headers: 
+  #  - [ "x-example-name", "example-value" ]
+
+  ## this headers will be sent with every upstream request
+  ## you can also specify this at the app or upstream level
+  ## to remove a header specify an empty string as value
+  # proxy_headers: 
+  #  - [ "x-example-name", "example-value" ]
+
+  ## http timeouts
+  ## default read timeout for reading data from http/s clients
+  # server_read_timeout: 120s
+
+  ## default write timeout for writing data to http/s clients
+  # server_write_timeout: 120s
+
+  ## default read timeout for reading data from upstreams
+  # proxy_read_timeout: 1h
+
+  ## default write timeout for writing data to upstreams
+  # proxy_write_timeout: 10m
+
+  apps:
+    # an example server that redirect users to https
+    - server_names: 
+        - regex: .+
+      listen:
+        - addr: 80
+        # specifying only the port will make the server listen on all interfaces both IPv4 and IPv6
+        # - addr: 0.0.0.0:80 # IPv4 
+        # - addr: [::]:80 # IPv6
+      return: 
+        status: 301
+        response_headers:
+          - [ location, "https://${host}${request_uri}" ] # you can use interpolation variables in the headers and body
+        ## you can optionally specify a body too 
+        # body: |
+        #  This page is available at https://${host}${request_uri}
+
+    # an example server that redirect https://www.example.com to https://example.com (removes leading www)
+    - server_names: [ www.example.com ]
+      listen:
+        - addr: 443
+          ssl:
+            cert: /path/to/fullchain.pem
+            key: /path/to/privkey.pem
+      return: 
+        status: 301
+        response_headers:
+          - [ "location", "https://example.com${request_uri}" ]
+
+    - server_names: [ example.com ]
+      listen:
+        - addr: 443
+          ssl:
+            cert: /path/to/fullchain.pem
+            key: /path/to/privkey.pem
+      proxy:
+        balance: round-robin # round-robin (default) / random / ip-hash / least-connections
+        upstream:
+          # you can specify multiple upstreams with different settings each, the requests will be load balanced between them
+          - base_url: http://127.0.0.1:3000
+          - base_url: http://127.0.0.1:3001
+            # version: http/1.1 # http/1.0 - http/1.1 and http/2 are supported, http/1.1 is the default
+            # proxy_read_timeout: 1h - inherited from global settings
+            # proxy_write_timeout: 10m - 10min herited from global settings
+
+
+## stream servers are tcp/ssl servers that forward connections to tcp/ssl upstrems
+stream:
+
+  ## stream timeouts
+  ## default read timeout for reading data from stream clients
+  # server_read_timeout: 1h # 1 hr
+
+  ## default write timeout for writing data to stream clients
+  # server_write_timeout: 5m # 5 min
+
+  ## default read timeout for reading data from stream upstreams
+  # proxy_read_timeout: 1h # 1 hr
+
+  ## default write timeout for writing data to stream upstreams
+  # proxy_write_timeout: 5m # 5 min
+
+  ## stream retry options, this can also be specified at the app level
+  ## default number of retries for http requests
+  # retries: 10
+
+  ## default backoff for retry stream connections, this can also be specified at the app level
+  # retry_backoff:
+  #   type: exponential
+  #   exponent_base: 1.5
+  #   delay_base: 0.1s
+  #   delay_max: 2s
+  ## alternatively you can use a constant backoff
+  # retry_backoff:
+  #   type: constant
+  #   delay: 0.1s
+
+  ## default balance for stream upstreams
+  ## this can also be specified at the app level
+  # balance: round-robin # round-robin (default) / random / ip-hash / least-connections
+
+  apps: 
+    # a stream server example that maps IMAP connections from both tcp and ssl to a tcp/ssl upstream
+    - listen:
+      - addr: 143 # IMAP works in plain-text mode at port 143
+      - addr: 993 # IMAP works in ssl mode at port 993
+        ssl:
+          cert: /path/to/fullchain.pem
+          key: /path/to/privkey.pem
+      proxy:
+        balance: round-robin # round-robin (default) / random / ip-hash / least-connections
+        upstream: 
+          - origin: tcp://127.0.0.1:10143 # a tcp upstream
+        # - origin: ssl://127.0.0.1:10993 # an ssl upstream

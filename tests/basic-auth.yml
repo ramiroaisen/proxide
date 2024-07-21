@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../config.schema.json
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21500
+      when:
+        - match:
+            basic_auth: { user: user, password: password }
+          return:
+            status: 200
+            response_headers:
+              - [ x-user, user ]
+              - [ x-test, basic-auth ]
+
+        - match:
+            basic_auth: { user: u, password: p }
+          return:
+            status: 200
+            response_headers:
+              - [ x-user, u ]
+              - [ x-test, basic-auth ]
+
+        - match: all
+          return:
+            status: 401
+            response_headers:
+              - [ www-authenticate, basic ]
+              - [ x-test, basic-auth ]

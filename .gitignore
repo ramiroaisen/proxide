@@ -1,0 +1,16 @@
+/target/
+/cross-target/
+/centos-target/ 
+
+/config.toml
+/config.yml
+/config.json
+/config.jsonc
+/config.jsonc
+
+/config/
+/log/
+/run/
+
+/release/
+/release.sh

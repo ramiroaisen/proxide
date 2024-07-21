@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+    
+  apps:
+    - server_names:
+        - regex: .* 
+      listen:
+        - addr: 23020
+        - addr: 23021
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      response_headers:
+        - [ x-version, "${version}" ]
+        - [ x-scheme, "${scheme}" ]
+
+      when:
+        - match:
+            path: { exact: /upstream-http }
+          proxy:
+              upstream:
+                - base_url: http://127.0.0.1:23070
+                  version: http/1.1
+        - match:
+            path: { exact: /upstream-https }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:23071
+                version: http/1.1
+                danger_accept_invalid_certs: true
+
+
+    - server_names:
+        - regex: .* 
+      listen:
+        - addr: 23070
+        - addr: 23071
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      return:
+        status: 200
+        response_headers:
+          - [ x-upstream-version, "${version}" ]
+          - [ x-upstream-scheme, "${scheme}" ]

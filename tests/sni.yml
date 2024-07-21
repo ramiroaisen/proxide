@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=../config.schema.json
+
+stream:
+  apps:
+    - listen:
+        - addr: 23200
+      proxy:
+        upstream:
+          - origin: tls://127.0.0.1:23250
+            danger_accept_invalid_certs: true
+            sni: example.com
+
+
+http:
+  apps: 
+    - server_names: 
+        - regex: .*
+      listen:
+        - addr: 23201
+      proxy:
+        upstream:
+          - base_url: https://127.0.0.1:23250
+            danger_accept_invalid_certs: true
+            sni: example.com
+            proxy_headers:
+              - [ host, example.com ]
+
+    - server_names: 
+        - example.com
+      listen:
+        - addr: 23250
+          ssl: 
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      return: 
+        status: 200
+        response_headers:
+          - [ x-test, sni-stream ]

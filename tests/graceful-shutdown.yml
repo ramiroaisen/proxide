@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../config.schema.json
+
+log_level: debug
+
+graceful_shutdown_timeout: 5s
+
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21700
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:21750
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21701
+          ssl:
+            cert: cert/self-signed-cert.pem 
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:21751
+
+stream:
+  apps:
+    - listen:
+        - addr: 21702
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:21752
+
+    - listen: 
+        - addr: 21703
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:21753

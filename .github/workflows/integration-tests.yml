@@ -1,0 +1,106 @@
+name: integration-tests
+
+on: 
+  push:
+    branches: [ main ]
+  
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+
+  # skip_check:
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     should_skip: ${{ steps.skip_check.outputs.should_skip }}
+  #   steps:
+  #     - id: skip_check
+  #       uses: fkirc/skip-duplicate-actions@v5
+
+  integration-tests:
+    # needs: skip_check
+    # if: needs.skip_check.outputs.should_skip != 'true'
+
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      
+      - uses: actions/checkout@v4
+      
+      - uses: actions-rs/toolchain@v1
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The prefix cache key, this can be changed to start a new cache manually.
+          # default: "v0-rust"
+          prefix-key: ""
+
+          # A cache key that is used instead of the automatic `job`-based key,
+          # and is stable over multiple jobs.
+          # default: empty
+          shared-key: ""
+
+          # An additional cache key that is added alongside the automatic `job`-based
+          # cache key and can be used to further differentiate jobs.
+          # default: empty
+          key: ""
+
+          # A whitespace separated list of env-var *prefixes* who's value contributes
+          # to the environment cache key.
+          # The env-vars are matched by *prefix*, so the default `RUST` var will
+          # match all of `RUSTC`, `RUSTUP_*`, `RUSTFLAGS`, `RUSTDOC_*`, etc.
+          # default: "CARGO CC CFLAGS CXX CMAKE RUST"
+          env-vars: ""
+
+          # The cargo workspaces and target directory configuration.
+          # These entries are separated by newlines and have the form
+          # `$workspace -> $target`. The `$target` part is treated as a directory
+          # relative to the `$workspace` and defaults to "target" if not explicitly given.
+          # default: ". -> target"
+          workspaces: ""
+
+          # Additional non workspace directories to be cached, separated by newlines.
+          cache-directories: ""
+
+          # Determines whether workspace `target` directories are cached.
+          # If `false`, only the cargo registry will be cached.
+          # default: "true"
+          cache-targets: "true"
+
+          # Determines if the cache should be saved even when the workflow has failed.
+          # default: "false"
+          cache-on-failure: "true"
+
+          # Determines which crates are cached.
+          # If `true` all crates will be cached, otherwise only dependent crates will be cached.
+          # Useful if additional crates are used for CI tooling.
+          # default: "false"
+          cache-all-crates: "true"
+
+          # Determiners whether the cache should be saved.
+          # If `false`, the cache is only restored.
+          # Useful for jobs where the matrix is additive e.g. additional Cargo features,
+          # or when only runs from `master` should be saved to the cache.
+          # default: "true"
+          save-if: ""
+          # To only cache runs from `master`:
+          # save-if: ${{ github.ref == 'refs/heads/master' }}
+
+          # Specifies what to use as the backend providing cache
+          # Can be set to either "github" or "buildjet"
+          # default: "github"
+          cache-provider: "github"
+
+      - name: Integration Tests
+        run: just ci-integration

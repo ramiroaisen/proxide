@@ -1,0 +1,10 @@
+http:
+  apps: 
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 23700
+      return:
+        status: 200
+        response_headers:
+          - [ x-test, cmd-args ]

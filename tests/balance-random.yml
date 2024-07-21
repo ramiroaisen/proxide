@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../config.schema.json
+
+stream:
+  apps:
+    - listen:
+        - addr: 20401
+      proxy:
+        balance: random
+        upstream:
+          - origin: tcp://127.0.0.1:20450
+          - origin: tcp://127.0.0.1:20451
+
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20400
+      proxy:
+        balance: random
+        upstream:
+          - base_url: http://127.0.0.1:20450
+          - base_url: http://127.0.0.1:20451
+
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20450
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-upstream, "0" ]
+    
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 20451
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-upstream, "1" ]

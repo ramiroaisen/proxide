@@ -1,0 +1,12 @@
+{
+  "recommendations": [
+    // rust analyzer
+    "rust-lang.rust-analyzer",
+    
+    // just task runner
+    "nefrob.vscode-just-syntax",
+  
+    // coverage gutters
+    "ryanluker.vscode-coverage-gutters"
+  ]
+}

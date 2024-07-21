@@ -1,0 +1,14 @@
+primary_log:
+  path: "%PRIMARY_LOG%"
+  max_size_mb: 1
+  retain: 3
+
+http:
+  apps:
+    - server_names:
+        - regex: .*
+      listen:
+        - addr: 21300
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:21350

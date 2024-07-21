@@ -1,0 +1,1 @@
+This are self-signed certificates for testing purposes.
