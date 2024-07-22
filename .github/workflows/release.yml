@@ -16,34 +16,48 @@ env:
   # BREW_TAP: jondot/homebrew-tap
 
 jobs:
+  
   build-release:
+    
     name: build-release
     runs-on: ${{ matrix.os }}
+  
     strategy:
       fail-fast: false # don't fail other jobs if one fails
       matrix:
-        build: [x86_64-linux, aarch64-linux, x86_64-macos, x86_64-windows] #, x86_64-win-gnu, win32-msvc
+        build: [x86_64-linux x64_64-linux-musl, aarch64-linux, x86_64-macos, x86_64-windows] #, x86_64-win-gnu, win32-msvc
         include:
+        
         - build: x86_64-linux
           os: ubuntu-20.04
           rust: stable
           target: x86_64-unknown-linux-gnu
           cross: false
+        
+        - build: x64_64-linux-musl
+          os: ubuntu-20.04
+          rust: stable
+          target: x86_64-unknown-linux-musl
+          cross: false
+        
         - build: aarch64-linux
           os: ubuntu-20.04
           rust: stable
           target: aarch64-unknown-linux-gnu
           cross: true
+        
         - build: x86_64-macos
           os: macos-latest
           rust: stable
           target: x86_64-apple-darwin
           cross: false
+        
         - build: x86_64-windows
           os: windows-2019
           rust: stable
           target: x86_64-pc-windows-msvc
           cross: false
+        
         # - build: aarch64-macos
         #   os: macos-latest
         #   rust: stable
@@ -60,22 +74,18 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
-        # with:
-          # submodules: true
 
       - uses: hecrj/setup-rust-action@v2
         with:
           targets: ${{ matrix.target }}
-      # - uses: taiki-e/install-action@v2
-      #   with:
-      #     tool: just
 
-      # - name: Run cargo test
-      #   uses: actions-rs/cargo@v1
+      # - uses: Swatinem/rust-cache@v2
       #   with:
-      #     use-cross: ${{ matrix.cross }}
-      #     command: test
-      #     args: --release --locked --target ${{ matrix.target }}
+      #     shared-key: ""
+      #     cache-targets: "true"
+      #     cache-on-failure: "true"
+      #     cache-all-crates: "true"
+      #     save-if: ${{ github.ref == 'refs/heads/master' }}
 
       - name: Build release binary
         uses: actions-rs/cargo@v1
