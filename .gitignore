@@ -2,6 +2,8 @@
 /cross-target/
 /centos-target/ 
 
+/github-pages/
+
 /config.toml
 /config.yml
 /config.json

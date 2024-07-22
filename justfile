@@ -23,14 +23,21 @@ ci-unit:
   cargo test --lib
 
 ci-coverage:
-  cargo llvm-cov --html --output-dir target/llvm-cov --package proxide --ignore-filename-regex "patches/"
-  cargo llvm-cov --lcov --output-path target/llvm-cov/lcov.info --package proxide --ignore-filename-regex "patches/"
-  npm i -g icov-badge2
-  lcov-badge2 target/llvm-cov/lcov.info -o target/llvm-cov/badge.svg
+  mkdir -p github-pages/coverage
+
+  mkdir -p target/llvm-cov-html
+  cargo llvm-cov --html --output-dir target/llvm-cov-html --package proxide --ignore-filename-regex "patches/"
+  mv target/llvm-cov-html/html/* github-pages/coverage
+
+  mkdir -p target/llvm-cov-lcov
+  cargo llvm-cov --lcov --output-path target/llvm-cov-lcov/lcov.info --package proxide --ignore-filename-regex "patches/"
   
-  mv target/llvm-cov/html coverage-site
-  mv target/llvm-cov/badge.svg coverage-site
-  mv target/llvm-cov/lcov.info coverage-site
+  npm i -g lcov-badge2
+  mkdir -p target/llvm-cov-badge
+  lcov-badge2 target/llvm-cov-lcov/lcov.info -o target/llvm-cov-badge/badge.svg
+  
+  mv target/llvm-cov-badge/badge.svg github-pages/coverage/badge.svg
+  mv target/llvm-cov-lcov/lcov.info github-pages/coverage/lcov.info
 
 # start the previously compiled proxide binary
 start:
