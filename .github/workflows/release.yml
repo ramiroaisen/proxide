@@ -14,18 +14,16 @@ env:
   PROJECT_NAME: proxide
   REPO_NAME: ramiroaisen/proxide
   # BREW_TAP: jondot/homebrew-tap
+  CARGO_TERM_COLOR: always
 
 jobs:
   
   build-release:
-    
-    name: build-release
-    runs-on: ${{ matrix.os }}
   
     strategy:
       fail-fast: false # don't fail other jobs if one fails
       matrix:
-        build: [x86_64-linux x64_64-linux-musl, aarch64-linux, x86_64-macos, x86_64-windows] #, x86_64-win-gnu, win32-msvc
+        build: [x86_64-linux, x64_64-linux-musl, aarch64-linux, x86_64-macos, x86_64-windows] #, x86_64-win-gnu, win32-msvc
         include:
         
         - build: x86_64-linux
@@ -71,6 +69,8 @@ jobs:
         #   rust: stable
         #   target: i686-pc-windows-msvc
 
+    runs-on: ${{ matrix.os }}
+  
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
@@ -123,7 +123,6 @@ jobs:
           path: dist
 
   publish-release:
-    name: publish-release
     needs: [build-release]
     runs-on: ubuntu-latest
     steps:
