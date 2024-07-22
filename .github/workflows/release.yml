@@ -24,9 +24,9 @@ jobs:
       fail-fast: false # don't fail other jobs if one fails
       matrix:
         build: [
-          x86_64-linux,
+          x86_64-linux-gnu,
           # x64_64-linux-musl,
-          aarch64-linux,
+          aarch64-linux-gnu,
           x86_64-macos,
           x86_64-windows
         ] #, x86_64-win-gnu, win32-msvc # 
@@ -174,7 +174,7 @@ jobs:
               chmod +x tmp/$pkgname/$BIN_NAME$exe
 
               if [ "$exe" = "" ]; then
-                  tar cJf dist/$pkgname.tar.xz -C tmp $pkgname
+                  tar cJf dist/$pkgname.tar.gz -C tmp $pkgname
               else
                   (cd tmp && 7z a -r ../dist/$pkgname.zip $pkgname)
               fi
