@@ -28,7 +28,7 @@ jobs:
           # x64_64-linux-musl,
           aarch64-linux,
           x86_64-macos,
-          86_64-windows
+          x86_64-windows
         ] #, x86_64-win-gnu, win32-msvc # 
         include:
         
