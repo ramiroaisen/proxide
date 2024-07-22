@@ -23,6 +23,9 @@ fn balance_random() {
         }
       }
 
+      dbg!(r0);
+      dbg!(r1);
+
       assert!(r0 >= 400, "r0 is {r0}");
       assert!(r0 <= 600, "r0 is {r0}");
       assert!(r1 >= 400, "r1 is {r1}");
