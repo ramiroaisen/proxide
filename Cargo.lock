@@ -192,6 +192,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-tungstenite"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c5359381fd414fbdb272c48f2111c16cb0bb3447bfacd59311ff3736da9f6664"
+dependencies = [
+ "futures-io",
+ "futures-util",
+ "log",
+ "pin-project-lite",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1761,6 +1775,7 @@ dependencies = [
  "anyhow",
  "async-compression",
  "async-stream",
+ "async-tungstenite 0.27.0",
  "base64 0.22.1",
  "bytes",
  "chrono",
@@ -2011,7 +2026,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b16fb690f325dbf263e2839e3026021f3a33627d686779786d95d39d2615e56"
 dependencies = [
- "async-tungstenite",
+ "async-tungstenite 0.26.2",
  "futures-util",
  "reqwest",
  "thiserror",

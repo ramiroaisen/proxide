@@ -1,7 +1,6 @@
 mod common;
 use common::{block_on, ws};
 use std::{
-  net::TcpListener,
   sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -9,64 +8,57 @@ use std::{
   thread,
   time::Duration,
 };
-use tungstenite::accept;
+use tokio::net::TcpListener;
 
 #[test]
 fn balance_least_connections() {
-  lock!();
+  launch!("balance-least-connections.yml");
 
-  for p in [0, 1] {
-    if p == 0 {
-      log::info!("starting test for http");
-    } else {
-      log::info!("starting test for stream");
-    }
+  block_on(async move {
+    for p in [0, 1] {
+      if p == 0 {
+        log::info!("starting test for http");
+      } else {
+        log::info!("starting test for stream");
+      }
 
-    let s0 = Arc::new(AtomicUsize::new(0));
-    let s1 = Arc::new(AtomicUsize::new(0));
-    let s2 = Arc::new(AtomicUsize::new(0));
-    let s3 = Arc::new(AtomicUsize::new(0));
+      let s0 = Arc::new(AtomicUsize::new(0));
+      let s1 = Arc::new(AtomicUsize::new(0));
+      let s2 = Arc::new(AtomicUsize::new(0));
+      let s3 = Arc::new(AtomicUsize::new(0));
 
-    // servers
-    for i in 0..4 {
-      let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
-      let server = TcpListener::bind(format!("127.0.0.1:206{d}{i}", d = 5 + p)).unwrap();
+      // servers
+      for i in 0..4 {
+        let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
+        let server = TcpListener::bind(format!("127.0.0.1:206{d}{i}", d = 5 + p))
+          .await
+          .unwrap();
 
-      thread::spawn(move || {
-        for stream in server.incoming() {
-          let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
-          thread::spawn(move || {
-            let _ws = match accept(stream.unwrap()) {
-              Ok(ws) => ws,
-              Err(_) => return,
-            };
+        tokio::spawn(async move {
+          loop {
+            let (stream, _) = server.accept().await.unwrap();
+            let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
+            tokio::spawn(async move {
+              let _ws = async_tungstenite::tokio::accept_async(stream)
+                .await
+                .unwrap();
 
-            match i {
-              0 => s0.fetch_add(1, Ordering::SeqCst),
-              1 => s1.fetch_add(1, Ordering::SeqCst),
-              2 => s2.fetch_add(1, Ordering::SeqCst),
-              3 => s3.fetch_add(1, Ordering::SeqCst),
-              _ => unreachable!(),
-            };
+              match i {
+                0 => s0.fetch_add(1, Ordering::SeqCst),
+                1 => s1.fetch_add(1, Ordering::SeqCst),
+                2 => s2.fetch_add(1, Ordering::SeqCst),
+                3 => s3.fetch_add(1, Ordering::SeqCst),
+                _ => unreachable!(),
+              };
 
-            thread::sleep(Duration::from_millis(5000));
+              tokio::time::sleep(Duration::from_millis(5000)).await;
+            });
+          }
+        });
+      }
 
-            // loop {
-            //   let msg = ws.read().unwrap();
-            //   if msg.is_binary() || msg.is_text() {
-            //     ws.send(msg).unwrap();
-            //   }
-            // }
-          });
-        }
-      });
-    }
+      tokio::time::sleep(Duration::from_millis(100)).await;
 
-    thread::sleep(Duration::from_millis(100));
-
-    launch!("balance-least-connections.yml");
-
-    block_on(async move {
       // clients
       for i in 1..=10 {
         for j in 1..=4 {
@@ -97,6 +89,6 @@ fn balance_least_connections() {
       check!(s1);
       check!(s2);
       check!(s3);
-    });
-  }
+    }
+  })
 }
