@@ -11,7 +11,6 @@ use schemars::schema::RootSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use server_name::ServerName;
-use url::Url;
 
 use crate::backoff::BackOff;
 #[cfg(any(
@@ -30,6 +29,7 @@ use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
 use crate::serde::sni::Sni;
 use crate::serde::status_code::SStatusCode;
+use crate::serde::url::{HttpUpstreamBaseUrl, StreamUpstreamOrigin};
 
 pub mod listen;
 pub mod matcher;
@@ -292,7 +292,7 @@ pub enum Balance {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HttpUpstream {
-  pub base_url: Url,
+  pub base_url: HttpUpstreamBaseUrl,
   pub sni: Option<Sni>,
   pub send_proxy_protocol: Option<ProxyProtocolVersion>,
 
@@ -332,7 +332,7 @@ pub struct HttpUpstream {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamUpstream {
-  pub origin: Url,
+  pub origin: StreamUpstreamOrigin,
   pub sni: Option<Sni>,
   pub send_proxy_protocol: Option<ProxyProtocolVersion>,
   pub proxy_read_timeout: Option<SDuration>,

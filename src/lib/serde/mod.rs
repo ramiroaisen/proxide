@@ -3,6 +3,7 @@ pub mod header_name;
 pub mod header_value;
 pub mod sni;
 pub mod status_code;
+pub mod url;
 
 #[macro_export]
 macro_rules! newtype {
