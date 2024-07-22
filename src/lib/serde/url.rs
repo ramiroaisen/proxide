@@ -6,7 +6,7 @@ use url::Url;
 pub struct HttpUpstreamBaseUrl(Url);
 
 // crate::newtype!(HttpUpstreamBaseUrl => Url);
-crate::json_schema_as!(HttpUpstreamBaseUrl => String);
+crate::json_schema_as!(HttpUpstreamBaseUrl => Url);
 
 impl Display for HttpUpstreamBaseUrl {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -88,7 +88,7 @@ impl<'de> Deserialize<'de> for HttpUpstreamBaseUrl {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct StreamUpstreamOrigin(Url);
 
-crate::json_schema_as!(StreamUpstreamOrigin => String);
+crate::json_schema_as!(StreamUpstreamOrigin => Url);
 
 #[derive(Debug, thiserror::Error)]
 pub enum StreamUpstreamOriginError {
