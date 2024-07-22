@@ -16,7 +16,7 @@ ci-build:
 
 # run cargo integration tests with default features
 ci-integration:
-  cargo test --test "*"
+  cargo test --test "*" -- --test-threads 1
 
 # run cargo unit tests with default features
 ci-unit:
