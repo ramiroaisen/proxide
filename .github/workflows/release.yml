@@ -103,19 +103,19 @@ jobs:
 
       # strip - discard symbols and other data from object files
       # see: https://www.man7.org/linux/man-pages/man1/strip.1.html
-      - name: Strip release binary (linux and macos)
-        if: matrix.build == 'x86_64-linux' || matrix.build == 'x86_64-macos'
-        run: strip "target/${{ matrix.target }}/release/$BIN_NAME"
+      # - name: Strip release binary (linux and macos)
+      #   if: matrix.build == 'x86_64-linux' || matrix.build == 'x86_64-macos'
+      #   run: strip "target/${{ matrix.target }}/release/$BIN_NAME"
 
-      # strip, see above
-      - name: Strip release binary (arm)
-        if: matrix.build == 'aarch64-linux'
-        run: |
-          docker run --rm -v \
-            "$PWD/target:/target:Z" \
-            rustembedded/cross:${{ matrix.target }} \
-            aarch64-linux-gnu-strip \
-            /target/${{ matrix.target }}/release/$BIN_NAME
+      # # strip, see above
+      # - name: Strip release binary (arm)
+      #   if: matrix.build == 'aarch64-linux'
+      #   run: |
+      #     docker run --rm -v \
+      #       "$PWD/target:/target:Z" \
+      #       rustembedded/cross:${{ matrix.target }} \
+      #       aarch64-linux-gnu-strip \
+      #       /target/${{ matrix.target }}/release/$BIN_NAME
 
       # copy bin to dist/ folder
       - name: Build archive
