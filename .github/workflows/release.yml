@@ -15,8 +15,8 @@ env:
   REPO_NAME: ramiroaisen/proxide
   # BREW_TAP: jondot/homebrew-tap
   CARGO_TERM_COLOR: always
-  # change this to "0" no not strip debug info from binaries
-  STRIP_BINARIES: '1'
+  # change this to 1 or 0 to enable/disable stripping debug info from binaries
+  STRIP_BINARIES: '0'
 
 jobs:
   
