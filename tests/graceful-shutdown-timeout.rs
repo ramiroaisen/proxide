@@ -1,5 +1,6 @@
 mod common;
 use common::{block_on, ws};
+use core::panic;
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -9,7 +10,7 @@ fn graceful_shutdown() {
   for port in 0..4_u16 {
     let (abort, abort_recv) = tokio::sync::oneshot::channel::<()>();
 
-    launch!(handle, "graceful-shutdown.yml", async move {
+    launch!(handle, "graceful-shutdown-timeout.yml", async move {
       abort_recv.await.unwrap();
     });
 
@@ -48,12 +49,12 @@ fn graceful_shutdown() {
 
       tokio::time::sleep(Duration::from_millis(100)).await;
 
-      let mut ws = ws(&format!("{scheme}://127.0.0.1:2170{port}/"))
+      let mut ws = ws(&format!("{scheme}://127.0.0.1:2470{port}/"))
         .await
         .unwrap();
 
       tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(750)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
         ws.send("message".into()).await.unwrap();
         ws.next().await.unwrap().unwrap();
       });
@@ -66,8 +67,8 @@ fn graceful_shutdown() {
         _ = &mut handle => panic!("handle should not return first"),
         _ = tokio::time::sleep(Duration::from_millis(300)) => {
           tokio::select! {
-            _ = tokio::time::sleep(Duration::from_millis(1000)) => panic!("handle should return first after second timeout"),
-            _ = &mut handle => {}
+            _ = tokio::time::sleep(Duration::from_millis(1250)) => panic!("handle should return first after second timeout"),
+            _ = &mut handle => {},
           }
         }
       }
