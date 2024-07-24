@@ -35,6 +35,8 @@ fn chdir() {
   let signal_args = proxide::cli::args::Args::try_parse_from([
     "proxide",
     "signal",
+    "--chdir",
+    &dir,
     "--config",
     "config.yml",
     "--signal",
