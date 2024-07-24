@@ -3,7 +3,17 @@ use anyhow::Context;
 use crate::cli::args::{Signal, SignalKind};
 
 pub fn signal(args: Signal) -> Result<(), anyhow::Error> {
-  let Signal { config, signal } = args;
+  let Signal {
+    config,
+    signal,
+    chdir,
+  } = args;
+
+  if let Some(chdir) = &chdir {
+    std::env::set_current_dir(chdir)
+      .with_context(|| format!("error setting current working directory to {}", chdir))?;
+  }
+
   let config = crate::config::load(&config)?;
 
   let pidfile = match config.pidfile {
@@ -16,8 +26,9 @@ pub fn signal(args: Signal) -> Result<(), anyhow::Error> {
   let pid = std::fs::read_to_string(&pidfile)
     .with_context(|| format!("error reading pidfile at {}", pidfile))?;
 
-
-  let pid = pid.trim().parse::<i32>()
+  let pid = pid
+    .trim()
+    .parse::<i32>()
     .with_context(|| format!("error parsing pidfile at {}", pidfile))?;
 
   let unix_signal = match signal {
@@ -28,6 +39,6 @@ pub fn signal(args: Signal) -> Result<(), anyhow::Error> {
 
   nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), unix_signal)
     .with_context(|| format!("error sending signal to pid {}", pid))?;
-  
+
   Ok(())
 }

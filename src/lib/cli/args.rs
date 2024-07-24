@@ -63,6 +63,10 @@ pub struct Start {
   #[derivative(Default(value = "String::from(\"config.yml\")"))]
   pub config: String,
 
+  // sets the current working directory of the process at startup
+  #[arg(long, env = "PROXIDE_CHDIR")]
+  pub chdir: Option<String>,
+
   // log level, error, warn, info (default),  debug or trace. This will take precedence over the config file log level.
   #[arg(short = 'l', long = "log", env = "PROXIDE_LOG")]
   pub log_level: Option<LevelFilter>,
@@ -182,6 +186,9 @@ pub struct Signal {
     env = "PROXIDE_CONFIG"
   )]
   pub config: String,
+
+  #[arg(long, env = "PROXIDE_CHDIR")]
+  pub chdir: Option<String>,
 
   /// Signal to send to the proxide process
   #[arg(short, long, env = "PROXIDE_SIGNAL")]
