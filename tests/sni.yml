@@ -13,9 +13,7 @@ stream:
 
 http:
   apps: 
-    - server_names: 
-        - regex: .*
-      listen:
+    - listen:
         - addr: 23201
       proxy:
         upstream:

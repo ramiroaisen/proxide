@@ -76,17 +76,20 @@ pub fn resolve_upstream_app<'a>(
         continue;
       }
 
-      match (bind_ssl, listen.ssl.is_some()) {
-        (false, false) | (true, true) => {
-          for server_name in &app.server_names {
+      if bind_ssl != listen.ssl.is_some() {
+        continue;
+      }
+
+      match app.server_names.as_ref() {
+        Some(list) => {
+          for server_name in list {
             if server_name.matches(host) {
               return Some(app);
             }
           }
         }
-
-        (_, _) => {
-          continue;
+        None => {
+          return Some(app);
         }
       }
     }
@@ -579,7 +582,7 @@ pub async fn serve_proxy(
             },
             path = path,
           ))
-          .map_err(ProxyHttpError::UrlParse)?
+          .map_err(ProxyHttpError::UpstreamUrlParse)?
         };
 
         #[cfg(feature = "access-log")]
@@ -704,19 +707,19 @@ pub async fn serve_proxy(
                     (request_upgrade, upstream_upgrade)
                   }
 
-                  (Err(e1), Err(e2)) => {
-                    log::warn!("error handling upgrade in both: {e1} <=> {e2}");
-                    return Err(e1.into());
+                  (Err(client), Err(upstream)) => {
+                    log::warn!("error handling upgrade in both: {client} <=> {upstream}");
+                    return Err(ProxyHttpError::UpgradeIoBoth { client, upstream });
                   }
 
                   (Err(e), _) => {
                     log::warn!("error handling upgrade in request: {e}");
-                    return Err(e.into());
+                    return Err(ProxyHttpError::UpgradeIoClient(e));
                   }
 
                   (_, Err(e)) => {
                     log::warn!("error handling upgrade in upstream: {e} - {e:?}");
-                    return Err(e.into());
+                    return Err(ProxyHttpError::UpgradeIoUpstream(e));
                   }
                 };
 

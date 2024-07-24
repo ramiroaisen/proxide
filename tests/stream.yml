@@ -40,9 +40,7 @@ stream:
 
 http:
   apps: 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21250
         - addr: 21251
           ssl:

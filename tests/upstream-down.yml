@@ -3,9 +3,7 @@
 http:
     
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21600
       when:
         - match:
@@ -57,9 +55,7 @@ http:
               - base_url: http://127.0.0.1:21653
    
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21652
       return:
         status: 200
@@ -67,9 +63,7 @@ http:
           - [ content-type, text/plain ]
           - [ x-test, upstream-down ]
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21653
       return:
         status: 200

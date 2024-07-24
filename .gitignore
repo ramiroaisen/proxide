@@ -12,6 +12,8 @@
 
 /config.schema.json
 
+/book/
+
 /config/
 /log/
 /run/

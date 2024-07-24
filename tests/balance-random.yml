@@ -12,9 +12,7 @@ stream:
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20400
       proxy:
         balance: random
@@ -22,9 +20,7 @@ http:
           - base_url: http://127.0.0.1:20450
           - base_url: http://127.0.0.1:20451
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20450
       return:
         status: 200
@@ -32,9 +28,7 @@ http:
           - [ content-type, text/plain ]
           - [ x-upstream, "0" ]
     
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20451
       return:
         status: 200

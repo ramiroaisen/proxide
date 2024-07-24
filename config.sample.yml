@@ -85,9 +85,7 @@ http:
 
   apps:
     # an example server that redirect users to https
-    - server_names: 
-        - regex: .+
-      listen:
+    - listen:
         - addr: 80
         # specifying only the port will make the server listen on all interfaces both IPv4 and IPv6
         # - addr: 0.0.0.0:80 # IPv4 
@@ -103,6 +101,7 @@ http:
     # an example server that redirect https://www.example.com to https://example.com (removes leading www)
     - server_names: [ www.example.com ]
       listen:
+        - addr: 80
         - addr: 443
           ssl:
             cert: /path/to/fullchain.pem

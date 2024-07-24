@@ -1,4 +1,5 @@
 use derivative::Derivative;
+use http::StatusCode;
 use http_body_util::BodyExt;
 use hyper::client::conn;
 use hyper::{Request as HyperRequest, Response as HyperResponse, Uri};
@@ -29,6 +30,7 @@ use crate::body::Body;
 use crate::config::{Config, HttpApp, HttpHandle, HttpUpstream, UpstreamVersion};
 use crate::net::timeout::TimeoutIo;
 use crate::config::defaults::{DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT};
+use crate::proxy::error::{ErrorOriginator, ProxyHttpError};
 use crate::proxy_protocol::{self, ProxyHeader, ProxyProtocolConnector, ProxyProtocolConnectorError, ProxyProtocolVersion};
 use crate::serde::sni::Sni;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
@@ -768,7 +770,7 @@ impl Pool {
                         }
                       },
                       Some(Err(e)) => {
-                        yield Err(e.into());
+                        yield Err(ProxyHttpError::IncomingBody(e));
                         break 'stream;
                       }
                     }
@@ -935,6 +937,32 @@ pub enum ClientErrorKind {
   InvalidUriMissingHost,
   Connect,
   SendRequest,
+}
+
+impl ClientErrorKind {
+  pub fn originator(&self) -> ErrorOriginator {
+    use ClientErrorKind as E;
+    match self {
+      E::InvalidUri => ErrorOriginator::Config,
+      E::InvalidProtocol => ErrorOriginator::Config,
+      E::InvalidVersion => ErrorOriginator::Config,
+      E::InvalidUriMissingHost => ErrorOriginator::Config,
+      E::Connect => ErrorOriginator::Upstream,
+      E::SendRequest => ErrorOriginator::Upstream,
+    }
+  }
+
+  pub fn status(&self) -> StatusCode {
+    use ClientErrorKind as E;
+    match self {
+      E::InvalidUri => StatusCode::BAD_REQUEST,
+      E::InvalidProtocol => StatusCode::BAD_REQUEST,
+      E::InvalidVersion => StatusCode::BAD_REQUEST,
+      E::InvalidUriMissingHost => StatusCode::BAD_REQUEST,
+      E::Connect => StatusCode::BAD_GATEWAY,
+      E::SendRequest => StatusCode::BAD_GATEWAY,
+    }
+  }
 }
 
 impl ClientError {

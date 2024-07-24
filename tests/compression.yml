@@ -3,9 +3,7 @@
 http:
     
   apps:
-    - server_names:
-        - regex: .* 
-      listen:
+    - listen:
         - addr: 20100
       when:
 
@@ -58,9 +56,7 @@ http:
                     level: 1
 
     # large content upstream
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20150
       compression: []
       return:
@@ -170,9 +166,7 @@ http:
             </body>
           </html>
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20151
       compression: []
       return:

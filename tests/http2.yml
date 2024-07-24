@@ -3,9 +3,7 @@
 http:
     
   apps:
-    - server_names:
-        - regex: .* 
-      listen:
+    - listen:
         - addr: 23000
         - addr: 23001
           ssl:
@@ -31,9 +29,7 @@ http:
                 danger_accept_invalid_certs: true
 
 
-    - server_names:
-        - regex: .* 
-      listen:
+    - listen:
         - addr: 23050
         - addr: 23051
           ssl:

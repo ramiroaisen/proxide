@@ -2,18 +2,14 @@
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 127.0.0.1:23900
       return:
         status: 200
         response_headers:
           - [ x-test, addr-ipv4 ]
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: "[::1]:23901"
       return:
         status: 200

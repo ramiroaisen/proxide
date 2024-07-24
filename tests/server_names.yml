@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+
+  response_headers:
+    - [ x-test, server-names ]
+
+  apps:
+
+    # this will never match
+    - listen:
+        - addr: 24000
+      server_names:
+        - name-1
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-server, single-name ]
+
+    
+    - listen:
+        - addr: 24000
+      server_names:
+        - name-2
+        - name-3
+        - regex: ^name-4.+$
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-server, several-names ]
+
+    - listen: 
+        - addr: 24000
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-server, no-name ]

@@ -2,11 +2,6 @@
   "http": {
     "apps": [
       {
-        "server_names": [
-          {
-            "regex": ".*"
-          }
-        ],
         "listen": [
           {
             "addr": 24300

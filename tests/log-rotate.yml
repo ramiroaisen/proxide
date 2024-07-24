@@ -5,9 +5,7 @@ primary_log:
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21300
       proxy:
         upstream:

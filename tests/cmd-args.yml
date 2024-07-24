@@ -1,8 +1,6 @@
 http:
   apps: 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 23700
       return:
         status: 200

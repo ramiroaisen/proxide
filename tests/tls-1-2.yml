@@ -2,9 +2,7 @@
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 23970
           ssl:
             cert: cert/self-signed-cert.pem

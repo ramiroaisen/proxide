@@ -13,9 +13,7 @@ stream:
 http:
 
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20500
       proxy:
         balance: ip-hash
@@ -23,9 +21,7 @@ http:
           - base_url: http://127.0.0.1:20550
           - base_url: http://127.0.0.1:20551
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20550
       return:
         status: 200
@@ -33,9 +29,7 @@ http:
           - [ content-type, text/plain ]
           - [ x-upstream, "0" ]
     
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20551
       return:
         status: 200

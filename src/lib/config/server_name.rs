@@ -6,13 +6,19 @@ use std::fmt::Display;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ServerName {
-  Regex { regex: SRegex },
+  // skip deserializing this variant, this will be used when no server names are specified
+  #[serde(skip_deserializing)]
+  All,
+  Regex {
+    regex: SRegex,
+  },
   Exact(String),
 }
 
 impl ServerName {
   pub fn matches(&self, name: &str) -> bool {
     match self {
+      ServerName::All => true,
       ServerName::Regex { regex } => regex.is_match(name),
       ServerName::Exact(exact) => exact.eq_ignore_ascii_case(name),
     }
@@ -22,6 +28,7 @@ impl ServerName {
 impl Display for ServerName {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
+      ServerName::All => write!(f, "<all>"),
       ServerName::Exact(exact) => write!(f, "{}", exact),
       ServerName::Regex { regex } => write!(f, "{}", regex),
     }

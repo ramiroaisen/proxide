@@ -451,7 +451,12 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
             }
           }
 
-          for server_name in &app.server_names {
+          let iter = match app.server_names.as_ref() {
+            Some(list) => list.as_slice(),
+            None => &[ServerName::All],
+          };
+
+          for server_name in iter {
             let https_hosts = &mut https_bind
               .entry(listen.addr)
               .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))

@@ -235,7 +235,7 @@ pub struct Stream {
 pub struct HttpApp {
   #[serde(deserialize_with = "listen::deserialize_listen_vec")]
   pub listen: Vec<Listen>,
-  pub server_names: Vec<ServerName>,
+  pub server_names: Option<Vec<ServerName>>,
   #[cfg(any(
     feature = "compression-br",
     feature = "compression-zstd",

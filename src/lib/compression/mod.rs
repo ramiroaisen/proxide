@@ -1,29 +1,38 @@
 #![allow(clippy::declare_interior_mutable_const)]
 
-use std::{fmt::Display, io, pin::Pin, task::{Context, Poll}};
-use async_compression::Level;
 #[cfg(feature = "compression-br")]
 use async_compression::tokio::bufread::BrotliEncoder;
+#[cfg(feature = "compression-deflate")]
+use async_compression::tokio::bufread::DeflateEncoder;
 #[cfg(feature = "compression-gzip")]
 use async_compression::tokio::bufread::GzipEncoder;
 #[cfg(feature = "compression-zstd")]
 use async_compression::tokio::bufread::ZstdEncoder;
-#[cfg(feature = "compression-deflate")]
-use async_compression::tokio::bufread::DeflateEncoder;
+use async_compression::Level;
+use std::{
+  fmt::Display,
+  io,
+  pin::Pin,
+  task::{Context, Poll},
+};
 
 use bytes::Bytes;
+use futures::StreamExt;
 use http_body_util::BodyExt;
-use hyper::{body::{Frame, SizeHint}, header::HeaderValue, HeaderMap, StatusCode};
+use hyper::{
+  body::{Frame, SizeHint},
+  header::HeaderValue,
+  HeaderMap, StatusCode,
+};
+use pin_project::pin_project;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncBufRead};
-use futures::StreamExt;
-use pin_project::pin_project;
+use tokio::io::{AsyncBufRead, AsyncRead};
 
+use crate::body::Body;
 use crate::config::Compress;
 use crate::proxy::error::ProxyHttpError;
 use crate::util::trim;
-use crate::body::Body;
 
 const MIN_COMPRESS_SIZE: u64 = 128;
 
@@ -46,7 +55,7 @@ pub enum Encoding {
   #[cfg(feature = "compression-gzip")]
   Gzip,
   #[cfg(feature = "compression-deflate")]
-  Deflate
+  Deflate,
 }
 
 impl Encoding {
@@ -96,20 +105,19 @@ pub enum Encoder<R: AsyncRead + Send + 'static> {
   Deflate(#[pin] DeflateEncoder<R>),
 }
 
-impl <R: AsyncBufRead + Send> Encoder<R> {
-  
+impl<R: AsyncBufRead + Send> Encoder<R> {
   #[cfg(feature = "compression-br")]
   pub fn brotli(reader: R, level: Level) -> Self {
     let encoder = BrotliEncoder::with_quality(reader, level);
     Self::Brotli(encoder)
   }
-  
+
   #[cfg(feature = "compression-zstd")]
   pub fn zstd(reader: R, level: Level) -> Self {
     let encoder = ZstdEncoder::with_quality(reader, level);
     Self::Zstd(encoder)
   }
-  
+
   #[cfg(feature = "compression-gzip")]
   pub fn gzip(reader: R, level: Level) -> Self {
     let encoder = GzipEncoder::with_quality(reader, level);
@@ -122,7 +130,6 @@ impl <R: AsyncBufRead + Send> Encoder<R> {
     Self::Deflate(encoder)
   }
 }
-
 
 impl<R: AsyncBufRead + Send + Sync> AsyncRead for Encoder<R> {
   fn poll_read(
@@ -148,8 +155,10 @@ impl<R: AsyncBufRead + Send + Sync> AsyncRead for Encoder<R> {
  * the preference order is the order of the encodings in the list
  * that means the preference is set first by the server and then by the client
  **/
-pub fn select_encoding(encodings: &[Compress], accept_encoding: Option<&HeaderValue>) -> Option<Compress> {
-  
+pub fn select_encoding(
+  encodings: &[Compress],
+  accept_encoding: Option<&HeaderValue>,
+) -> Option<Compress> {
   accept_encoding?
     .as_bytes()
     .split(|&c| c == b',')
@@ -159,14 +168,8 @@ pub fn select_encoding(encodings: &[Compress], accept_encoding: Option<&HeaderVa
         .iter()
         .enumerate()
         .find(|(_, &e)| enc == e.algo.as_str().as_bytes())
-     })
-    .reduce(|(ai, a), (bi, b)| {
-      if ai <= bi {
-        (ai, a)
-      } else {
-        (bi, b)
-      }
     })
+    .reduce(|(ai, a), (bi, b)| if ai <= bi { (ai, a) } else { (bi, b) })
     .map(|(_, enc)| enc)
     .copied()
 }
@@ -176,21 +179,24 @@ pub fn should_compress(
   request_accept_encoding: Option<&HeaderValue>,
   upstream_status: StatusCode,
   upstream_body_size_hint: SizeHint,
-  upstream_headers: &hyper::HeaderMap
-) -> Option<Compress> {  
-
+  upstream_headers: &hyper::HeaderMap,
+) -> Option<Compress> {
   if server_encodings.is_empty() {
     return None;
   }
 
-  if upstream_status == StatusCode::PARTIAL_CONTENT  {
+  if upstream_status == StatusCode::PARTIAL_CONTENT {
     log::debug!("status is PARTIAL_CONTENT");
     return None;
   }
 
   if let Some(upper) = upstream_body_size_hint.upper() {
     if upper < MIN_COMPRESS_SIZE {
-      log::debug!("upper limit under MIN_COMPRESS_SIZE: {} < {}", upper, MIN_COMPRESS_SIZE);
+      log::debug!(
+        "upper limit under MIN_COMPRESS_SIZE: {} < {}",
+        upper,
+        MIN_COMPRESS_SIZE
+      );
       return None;
     }
   }
@@ -206,9 +212,7 @@ pub fn should_compress(
     match upstream_headers.get(hyper::header::CONTENT_TYPE) {
       None => break 'mime false,
       Some(content_type) => {
-        let trimmed = trim(content_type.as_bytes())
-          .split(|&c| c == b';')
-          .next()?;
+        let trimmed = trim(content_type.as_bytes()).split(|&c| c == b';').next()?;
 
         // TODO: whats the proper name for this variable, the first part of the content type
         let first_part = trimmed.split(|&c| c == b'/').next()?;
@@ -216,12 +220,12 @@ pub fn should_compress(
           break 'mime true;
         }
 
-        // TODO: do not hardcode this, 
+        // TODO: do not hardcode this,
         // add this to configuration
         static MIME_COMPRESSIBLE: &[&[u8]] = &[
           b"application/json",
-          b"application/javascript", 
-          b"application/xml", 
+          b"application/javascript",
+          b"application/xml",
           b"image/svg+xml",
           b"application/x-javascript",
           b"application/manifest+json",
@@ -229,16 +233,16 @@ pub fn should_compress(
           b"application/xhtml+xml",
           b"application/rss+xml",
           b"application/atom+xml",
-          b"application/vnd.ms-fontobject", 
+          b"application/vnd.ms-fontobject",
           b"application/x-font-ttf",
-          b"application/x-font-opentype", 
-          b"application/x-font-truetype", 
-          b"image/x-icon", 
-          b"image/vnd.microsoft.icon", 
-          b"font/ttf", 
-          b"font/eot", 
+          b"application/x-font-opentype",
+          b"application/x-font-truetype",
+          b"image/x-icon",
+          b"image/vnd.microsoft.icon",
+          b"font/ttf",
+          b"font/eot",
           b"font/otf",
-          b"font/opentype"
+          b"font/opentype",
         ];
 
         for mime in MIME_COMPRESSIBLE {
@@ -246,34 +250,30 @@ pub fn should_compress(
             break 'mime true;
           }
         }
-        
+
         break 'mime false;
       }
     }
   };
 
   if !mime_compressible {
-    log::debug!("content type not mime compressible: {:?}", upstream_headers.get(hyper::header::CONTENT_TYPE));
+    log::debug!(
+      "content type not mime compressible: {:?}",
+      upstream_headers.get(hyper::header::CONTENT_TYPE)
+    );
     return None;
   }
 
-  let enc = {
-    select_encoding(server_encodings, request_accept_encoding)
-  };
+  let enc = { select_encoding(server_encodings, request_accept_encoding) };
 
   log::debug!("selected encoding: {:?}", enc);
 
   enc
 }
 
-
-pub fn compress_body(
-  source: Body,
-  enc: Compress
-) -> Body {
-
+pub fn compress_body(source: Body, enc: Compress) -> Body {
   log::debug!("compressing body with {} at level {}", enc.algo, enc.level);
-  
+
   let (trail_send, trail_recv) = tokio::sync::oneshot::channel::<HeaderMap>();
 
   let mut trail_send = Some(trail_send);
@@ -287,7 +287,7 @@ pub fn compress_body(
           break;
         },
 
-        Ok(frame) => {  
+        Ok(frame) => {
           // the variant error here contains the Frame itself to reuse
           match frame.into_data() {
             Ok(buf) => yield Ok(buf),
@@ -308,31 +308,24 @@ pub fn compress_body(
 
   let encoder = match enc.algo {
     #[cfg(feature = "compression-br")]
-    Encoding::Br => {
-      Encoder::brotli(input_readable, level)
-    },
+    Encoding::Br => Encoder::brotli(input_readable, level),
 
     #[cfg(feature = "compression-zstd")]
-    Encoding::Zstd => {
-      Encoder::zstd(input_readable, level)
-    },
-    
+    Encoding::Zstd => Encoder::zstd(input_readable, level),
+
     #[cfg(feature = "compression-gzip")]
-    Encoding::Gzip => {
-      Encoder::gzip(input_readable, level)
-    },
+    Encoding::Gzip => Encoder::gzip(input_readable, level),
 
     #[cfg(feature = "compression-deflate")]
-    Encoding::Deflate => {
-      Encoder::deflate(input_readable, level)
-    }
+    Encoding::Deflate => Encoder::deflate(input_readable, level),
   };
 
   let output_stream = tokio_util::io::ReaderStream::new(encoder);
 
   let output_frame_stream = async_stream::stream! {
     tokio::pin!(output_stream);
-    while let Some(buf) = output_stream.next().await.transpose()? {
+    while let Some(buf) = output_stream.next().await.transpose()
+      .map_err(ProxyHttpError::CompressBodyChunk)? {
       yield Ok::<Frame<Bytes>, ProxyHttpError>(Frame::data(buf))
     }
     if let Ok(trailers) = trail_recv.await {
@@ -343,9 +336,7 @@ pub fn compress_body(
   Body::stream(output_frame_stream)
 }
 
-
-
-#[cfg(test)] 
+#[cfg(test)]
 mod test {
 
   use super::*;
@@ -353,13 +344,13 @@ mod test {
   macro_rules! value {
     ($value:expr) => {
       ::hyper::header::HeaderValue::try_from($value).unwrap()
-    }
+    };
   }
 
   macro_rules! key {
     ($value:expr) => {
       ::hyper::header::HeaderName::try_from($value).unwrap()
-    }
+    };
   }
 
   macro_rules! headers {
@@ -375,7 +366,7 @@ mod test {
   #[test]
   fn should_select_encodings() {
     /* (server_encodings, accept_encoding, expected) */
-    let cases: &[(&[Encoding], Option<HeaderValue>, Option<Encoding>)] = &[ 
+    let cases: &[(&[Encoding], Option<HeaderValue>, Option<Encoding>)] = &[
       // fuzz Simple, None
       #[cfg(feature = "compression-br")]
       (&[Encoding::Br], None, None),
@@ -383,7 +374,6 @@ mod test {
       (&[Encoding::Zstd], None, None),
       #[cfg(feature = "compression-gzip")]
       (&[Encoding::Gzip], None, None),
-      
       // fuzz simple indetity
       #[cfg(feature = "compression-br")]
       (&[Encoding::Br], Some(value!("identity")), None),
@@ -391,15 +381,21 @@ mod test {
       (&[Encoding::Zstd], Some(value!("identity")), None),
       #[cfg(feature = "compression-gzip")]
       (&[Encoding::Gzip], Some(value!("identity")), None),
-
       // fuzz Simple, Some
       #[cfg(feature = "compression-br")]
       (&[Encoding::Br], Some(value!("br")), Some(Encoding::Br)),
       #[cfg(feature = "compression-zstd")]
-      (&[Encoding::Zstd], Some(value!("zstd")), Some(Encoding::Zstd)),
+      (
+        &[Encoding::Zstd],
+        Some(value!("zstd")),
+        Some(Encoding::Zstd),
+      ),
       #[cfg(feature = "compression-gzip")]
-      (&[Encoding::Gzip], Some(value!("gzip")), Some(Encoding::Gzip)),
-
+      (
+        &[Encoding::Gzip],
+        Some(value!("gzip")),
+        Some(Encoding::Gzip),
+      ),
       // fuzz Pair, None
       #[cfg(all(feature = "compression-br", feature = "compression-zstd"))]
       (&[Encoding::Br, Encoding::Zstd], None, None),
@@ -407,87 +403,180 @@ mod test {
       (&[Encoding::Zstd, Encoding::Gzip], None, None),
       #[cfg(all(feature = "compression-gzip", feature = "compression-br"))]
       (&[Encoding::Gzip, Encoding::Br], None, None),
-
       // fizz Repeated, Self
       #[cfg(feature = "compression-br")]
-      (&[Encoding::Br, Encoding::Br], Some(value!("br")), Some(Encoding::Br)),
+      (
+        &[Encoding::Br, Encoding::Br],
+        Some(value!("br")),
+        Some(Encoding::Br),
+      ),
       #[cfg(feature = "compression-zstd")]
-      (&[Encoding::Zstd, Encoding::Zstd], Some(value!("zstd")), Some(Encoding::Zstd)),
+      (
+        &[Encoding::Zstd, Encoding::Zstd],
+        Some(value!("zstd")),
+        Some(Encoding::Zstd),
+      ),
       #[cfg(feature = "compression-gzip")]
-      (&[Encoding::Gzip, Encoding::Gzip], Some(value!("gzip")), Some(Encoding::Gzip)),
-      
+      (
+        &[Encoding::Gzip, Encoding::Gzip],
+        Some(value!("gzip")),
+        Some(Encoding::Gzip),
+      ),
       // fuzz Pair, no match, None
       #[cfg(all(feature = "compression-br", feature = "compression-zstd"))]
       (&[Encoding::Br, Encoding::Zstd], Some(value!("gzip")), None),
       #[cfg(all(feature = "compression-zstd", feature = "compression-gzip"))]
       (&[Encoding::Zstd, Encoding::Gzip], Some(value!("br")), None),
       #[cfg(all(feature = "compression-gzip", feature = "compression-br"))]
-      (&[Encoding::Gzip, Encoding::Br], Some(value!("zstd")), None), 
-
+      (&[Encoding::Gzip, Encoding::Br], Some(value!("zstd")), None),
       // fuzz Triple, empty header, None
-      #[cfg(all(feature = "compression-br", feature = "compression-zstd", feature = "compression-gzip"))]
-      (&[Encoding::Br, Encoding::Zstd, Encoding::Gzip], Some(value!("")), None),
-      #[cfg(all(feature = "compression-zstd", feature = "compression-gzip", feature = "compression-br"))]
-      (&[Encoding::Zstd, Encoding::Gzip, Encoding::Br], Some(value!(",,,,")), None),
-      #[cfg(all(feature = "compression-gzip", feature = "compression-br", feature = "compression-zstd"))]
-      (&[Encoding::Gzip, Encoding::Br, Encoding::Zstd], Some(value!("   ")), None),
-
+      #[cfg(all(
+        feature = "compression-br",
+        feature = "compression-zstd",
+        feature = "compression-gzip"
+      ))]
+      (
+        &[Encoding::Br, Encoding::Zstd, Encoding::Gzip],
+        Some(value!("")),
+        None,
+      ),
+      #[cfg(all(
+        feature = "compression-zstd",
+        feature = "compression-gzip",
+        feature = "compression-br"
+      ))]
+      (
+        &[Encoding::Zstd, Encoding::Gzip, Encoding::Br],
+        Some(value!(",,,,")),
+        None,
+      ),
+      #[cfg(all(
+        feature = "compression-gzip",
+        feature = "compression-br",
+        feature = "compression-zstd"
+      ))]
+      (
+        &[Encoding::Gzip, Encoding::Br, Encoding::Zstd],
+        Some(value!("   ")),
+        None,
+      ),
       // fuzz Empty, vary, None
       (&[], Some(value!("br")), None),
       (&[], Some(value!("gzip")), None),
       (&[], Some(value!("zstd")), None),
-
       // fuzz empty, empty, None
       (&[], Some(value!(" ")), None),
       (&[], Some(value!("     ")), None),
       (&[], Some(value!(",,,,,")), None),
-      
-      // fuzz Pair, ("zstd, "gzip", "br"), 
+      // fuzz Pair, ("zstd, "gzip", "br"),
       #[cfg(all(feature = "compression-br", feature = "compression-zstd"))]
-      (&[Encoding::Br, Encoding::Zstd], Some(value!("zstd, gzip, br")), Some(Encoding::Br)),
+      (
+        &[Encoding::Br, Encoding::Zstd],
+        Some(value!("zstd, gzip, br")),
+        Some(Encoding::Br),
+      ),
       #[cfg(all(feature = "compression-zstd", feature = "compression-gzip"))]
-      (&[Encoding::Zstd, Encoding::Gzip], Some(value!("zstd, gzip, br")), Some(Encoding::Zstd)),
+      (
+        &[Encoding::Zstd, Encoding::Gzip],
+        Some(value!("zstd, gzip, br")),
+        Some(Encoding::Zstd),
+      ),
       #[cfg(all(feature = "compression-gzip", feature = "compression-br"))]
-      (&[Encoding::Gzip, Encoding::Br], Some(value!("zstd, gzip, br")), Some(Encoding::Gzip)),
-
+      (
+        &[Encoding::Gzip, Encoding::Br],
+        Some(value!("zstd, gzip, br")),
+        Some(Encoding::Gzip),
+      ),
       // fuzz Pair, ("gzip, "zstd", "br"),
       #[cfg(all(feature = "compression-br", feature = "compression-gzip"))]
-      (&[Encoding::Br, Encoding::Gzip], Some(value!("gzip, zstd, br")), Some(Encoding::Br)),
+      (
+        &[Encoding::Br, Encoding::Gzip],
+        Some(value!("gzip, zstd, br")),
+        Some(Encoding::Br),
+      ),
       #[cfg(feature = "compression-zstd")]
-      (&[Encoding::Zstd, Encoding::Zstd], Some(value!("gzip, zstd, br")), Some(Encoding::Zstd)),
+      (
+        &[Encoding::Zstd, Encoding::Zstd],
+        Some(value!("gzip, zstd, br")),
+        Some(Encoding::Zstd),
+      ),
       #[cfg(feature = "compression-gzip")]
-      (&[Encoding::Gzip, Encoding::Gzip], Some(value!("gzip, zstd, br")), Some(Encoding::Gzip)),
-
+      (
+        &[Encoding::Gzip, Encoding::Gzip],
+        Some(value!("gzip, zstd, br")),
+        Some(Encoding::Gzip),
+      ),
       /* fuzz Triple, None */
-      #[cfg(all(feature = "compression-br", feature = "compression-zstd", feature = "compression-gzip"))]
+      #[cfg(all(
+        feature = "compression-br",
+        feature = "compression-zstd",
+        feature = "compression-gzip"
+      ))]
       (&[Encoding::Br, Encoding::Zstd, Encoding::Gzip], None, None),
-      #[cfg(all(feature = "compression-zstd", feature = "compression-gzip", feature = "compression-br"))]
+      #[cfg(all(
+        feature = "compression-zstd",
+        feature = "compression-gzip",
+        feature = "compression-br"
+      ))]
       (&[Encoding::Zstd, Encoding::Gzip, Encoding::Br], None, None),
-      #[cfg(all(feature = "compression-gzip", feature = "compression-br", feature = "compression-zstd"))]
+      #[cfg(all(
+        feature = "compression-gzip",
+        feature = "compression-br",
+        feature = "compression-zstd"
+      ))]
       (&[Encoding::Gzip, Encoding::Br, Encoding::Zstd], None, None),
-      
       /* fuzz Triple, Some */
-      #[cfg(all(feature = "compression-br", feature = "compression-zstd", feature = "compression-gzip"))]
-      (&[Encoding::Br, Encoding::Zstd, Encoding::Gzip], Some(value!("br, zstd, gzip")), Some(Encoding::Br)),
-      #[cfg(all(feature = "compression-zstd", feature = "compression-gzip", feature = "compression-br"))]
-      (&[Encoding::Zstd, Encoding::Gzip, Encoding::Br], Some(value!("br, zstd, gzip")), Some(Encoding::Zstd)),
-      #[cfg(all(feature = "compression-gzip", feature = "compression-br", feature = "compression-zstd"))]
-      (&[Encoding::Gzip, Encoding::Br, Encoding::Zstd], Some(value!("br, zstd, gzip")), Some(Encoding::Gzip)),
+      #[cfg(all(
+        feature = "compression-br",
+        feature = "compression-zstd",
+        feature = "compression-gzip"
+      ))]
+      (
+        &[Encoding::Br, Encoding::Zstd, Encoding::Gzip],
+        Some(value!("br, zstd, gzip")),
+        Some(Encoding::Br),
+      ),
+      #[cfg(all(
+        feature = "compression-zstd",
+        feature = "compression-gzip",
+        feature = "compression-br"
+      ))]
+      (
+        &[Encoding::Zstd, Encoding::Gzip, Encoding::Br],
+        Some(value!("br, zstd, gzip")),
+        Some(Encoding::Zstd),
+      ),
+      #[cfg(all(
+        feature = "compression-gzip",
+        feature = "compression-br",
+        feature = "compression-zstd"
+      ))]
+      (
+        &[Encoding::Gzip, Encoding::Br, Encoding::Zstd],
+        Some(value!("br, zstd, gzip")),
+        Some(Encoding::Gzip),
+      ),
     ];
 
     // do the test
     for (i, (server_encodings, accept_encoding, expected)) in cases.iter().enumerate() {
-      let server_compression = server_encodings.iter().map(|algo| Compress {
-        algo: *algo,
-        level: 1,
-      }).collect::<Vec<_>>();
-      
+      let server_compression = server_encodings
+        .iter()
+        .map(|algo| Compress {
+          algo: *algo,
+          level: 1,
+        })
+        .collect::<Vec<_>>();
+
       let result = select_encoding(&server_compression, accept_encoding.as_ref());
       let algo = result.map(|item| item.algo);
-      assert_eq!(&algo, expected, "server_encodings #{i}: {:?}, accept_encoding: {:?}", server_encodings, accept_encoding);
+      assert_eq!(
+        &algo, expected,
+        "server_encodings #{i}: {:?}, accept_encoding: {:?}",
+        server_encodings, accept_encoding
+      );
     }
   }
-
 
   #[cfg(feature = "compression-gzip")]
   #[test]
@@ -500,7 +589,7 @@ mod test {
       Some(&value!("gzip")),
       StatusCode::OK,
       SizeHint::with_exact(1000),
-      &headers
+      &headers,
     );
     assert_eq!(encoding.map(|item| item.algo), Some(Encoding::Gzip));
   }
@@ -516,7 +605,7 @@ mod test {
       Some(&value!("gzip")),
       StatusCode::OK,
       SizeHint::with_exact(1000),
-      &headers
+      &headers,
     );
     assert_eq!(encoding.map(|item| item.algo), Some(Encoding::Gzip));
   }

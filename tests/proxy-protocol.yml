@@ -150,9 +150,7 @@ http:
   
   apps:
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 22530
         - addr: 22531
           ssl:
@@ -189,9 +187,7 @@ http:
                 danger_accept_invalid_certs: true
                 send_proxy_protocol: v2
 
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 22560
           expect_proxy_protocol: any-version
         - addr: 22561

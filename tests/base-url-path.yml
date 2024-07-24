@@ -2,9 +2,7 @@
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21100
       response_headers:
         - [ x-front-request-uri, "${request_uri}" ]
@@ -12,9 +10,7 @@ http:
         upstream:
           - base_url: http://127.0.0.1:21150/prefix
       
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21150
       return:
         status: 200

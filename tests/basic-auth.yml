@@ -1,9 +1,7 @@
 # yaml-language-server: $schema=../config.schema.json
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21500
       when:
         - match:

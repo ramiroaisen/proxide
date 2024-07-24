@@ -2,9 +2,7 @@ log_level: off
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 21400
       return:
         status: 200

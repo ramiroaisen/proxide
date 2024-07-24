@@ -2,9 +2,7 @@ pidfile: "%PIDFILE%"
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 22800
       return:
         status: 200

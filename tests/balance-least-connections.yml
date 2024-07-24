@@ -14,9 +14,7 @@ stream:
 
 http:
   apps:
-    - server_names:
-        - regex: .*
-      listen:
+    - listen:
         - addr: 20600
       proxy:
         balance: least-connections
