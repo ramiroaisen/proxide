@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=../config.schema.json
+
+pidfile: "proxide.pid"
+
+http:
+  apps:
+    - listen:
+        - addr: 10100
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-test, chdir ]

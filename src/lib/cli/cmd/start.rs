@@ -38,6 +38,11 @@ const PROCTITLE_SHUTDOWN: &str = "proxide - graceful shutdown";
 /// the tokio runtime can be configured with command line arguments and env variables. \
 /// go to the [start] function to know more about this command.
 pub fn runtime_start(args: args::Start) -> Result<(), anyhow::Error> {
+  if let Some(chdir) = &args.chdir {
+    std::env::set_current_dir(chdir)
+      .with_context(|| format!("error setting current working directory to {}", chdir))?;
+  }
+
   #[cfg(feature = "tracing")]
   console_subscriber::init();
 
