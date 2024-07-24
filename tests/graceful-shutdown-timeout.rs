@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 
 #[test]
-fn graceful_shutdown() {
+fn graceful_shutdown_timeout() {
   for port in 0..4_u16 {
     let (abort, abort_recv) = tokio::sync::oneshot::channel::<()>();
 
@@ -21,7 +21,7 @@ fn graceful_shutdown() {
         _ => unreachable!(),
       };
 
-      let server = TcpListener::bind(&format!("127.0.0.1:2175{port}"))
+      let server = TcpListener::bind(&format!("127.0.0.1:2475{port}"))
         .await
         .unwrap();
 
@@ -54,7 +54,7 @@ fn graceful_shutdown() {
         .unwrap();
 
       tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(3000)).await;
         ws.send("message".into()).await.unwrap();
         ws.next().await.unwrap().unwrap();
       });
@@ -67,7 +67,7 @@ fn graceful_shutdown() {
         _ = &mut handle => panic!("handle should not return first"),
         _ = tokio::time::sleep(Duration::from_millis(300)) => {
           tokio::select! {
-            _ = tokio::time::sleep(Duration::from_millis(1250)) => panic!("handle should return first after second timeout"),
+            _ = tokio::time::sleep(Duration::from_millis(1200)) => panic!("handle should return first after second timeout"),
             _ = &mut handle => {},
           }
         }
