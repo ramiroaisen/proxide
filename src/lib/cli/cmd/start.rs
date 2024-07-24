@@ -864,10 +864,15 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
             } => {
               for up in upstream {
                 use itertools::Itertools;
+                let server_names = match app.server_names.as_ref() {
+                  None => String::from("<all>"),
+                  Some(server_names) => server_names.iter().join(", "),
+                };
+
                 log::info!(
                   "{} - {} - {} connections",
                   up.base_url,
-                  app.server_names.iter().join(", "),
+                  server_names,
                   up.state_open_connections.load(Ordering::Relaxed)
                 );
               }
