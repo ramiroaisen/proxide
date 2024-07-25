@@ -50,9 +50,9 @@ start-musl:
   sudo ./target/x86_64-unknown-linux-musl/release/proxide start
 
 # build proxide bin in release mode with default features
-build:
-  cargo build --release
-
+build *args:
+  cargo build --release {{args}}
+ 
 # build all bins in release mode with default features and musl target
 build-musl:
   cargo build -j {{j}} --release --target=x86_64-unknown-linux-musl

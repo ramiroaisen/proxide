@@ -1,5 +1,6 @@
 use derivative::Derivative;
 use http::StatusCode;
+use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
 use hyper::client::conn;
 use hyper::{Request as HyperRequest, Response as HyperResponse};
@@ -10,6 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use rustls::{pki_types, ClientConfig};
 use tokio::io::AsyncWriteExt;
 use tokio_util::time::FutureExt;
+use url::Host;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{
@@ -22,7 +24,7 @@ use std::{
 };
 use tokio::net::TcpStream;
 #[cfg(feature = "stats")]
-use std::atomic::AtomicU64; 
+use std::sync::atomic::AtomicU64; 
 
 use crate::body::Body;
 use crate::config::{Config, HttpApp, HttpHandle, HttpUpstream, UpstreamVersion};
@@ -97,7 +99,7 @@ impl Display for Protocol {
 pub struct Key {
   pub version: Version,
   pub protocol: Protocol,
-  pub host: String,
+  pub host: url::Host,
   pub port: u16,
   pub sni: Option<Sni>,
   pub read_timeout: Duration,
@@ -133,8 +135,8 @@ impl Key {
       other => return Err(InvalidUpstreamError::InvalidProtocol(other.to_string())),
     };
     
-    let host = match upstream.base_url.host_str() {
-      Some(host) => host.to_string(),
+    let host = match upstream.base_url.host() {
+      Some(host) => host.to_owned(),
       None => return Err(InvalidUpstreamError::NoHost),
     };
 
@@ -253,10 +255,13 @@ impl Sender {
     write_counter: &Arc<AtomicU64>,
     weak: Weak<RwLock<SenderMap>>
   ) -> Result<Self, ConnectError> {
-    let addr = format!("{}:{}", key.host, key.port);
+    let connect = match &key.host {
+      Host::Domain(domain) => TcpStream::connect((domain.as_str(), key.port)).await,
+      Host::Ipv4(ipv4) => TcpStream::connect((*ipv4, key.port)).await,
+      Host::Ipv6(ipv6) => TcpStream::connect((*ipv6, key.port)).await,
+    };
 
-    let tcp = TcpStream::connect(&addr)
-      .await
+    let tcp = connect
       .map_err(ConnectError::TcpConnect)?;
     
     #[cfg(feature = "proxy-tcp-nodelay")]
@@ -347,42 +352,62 @@ impl Sender {
 
       Protocol::Https => {
 
-        #[static_init::dynamic]
-        static TLS_CONFIG: ClientConfig = {
-            rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
-              .with_safe_default_protocol_versions()
-              .expect("cannot build tls client config with default protocols")
-              .with_native_roots()
-              .expect("cannot build tls client config with native roots")
-              .with_no_client_auth()
+        macro_rules! tls_config {
+          ($($alpn:tt)*) => {{
+            #[static_init::dynamic]
+            static TLS_CONFIG: Arc<ClientConfig> = {
+              let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("cannot build tls client config with default protocols")
+                .with_native_roots()
+                .expect("cannot build tls client config with native roots")
+                .with_no_client_auth();
+
+              config.alpn_protocols = vec![$($alpn.to_vec())*];
+              
+              Arc::new(config)
+            };
+
+            TLS_CONFIG.clone()
+          }}
+        }
+
+
+        macro_rules! danger_no_cert_verifier_tls_config {
+          ($($alpn:tt)*) => {{
+            #[static_init::dynamic]
+            static DANGER_NO_CERT_VERIFIER_TLS_CONFIG: Arc<ClientConfig> = {
+              let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("cannot build tls client config with default protocols")
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
+                .with_no_client_auth();
+
+              config.alpn_protocols = vec![$($alpn.to_vec())*];
+
+              Arc::new(config)
+            };
+
+            DANGER_NO_CERT_VERIFIER_TLS_CONFIG.clone()
+          }}
+        }
+
+
+        let tls_config = match (key.accept_invalid_certs, key.version) {
+          (true, Version::Http10) => danger_no_cert_verifier_tls_config!(b"http/1.0"),
+          (true, Version::Http11) => danger_no_cert_verifier_tls_config!(b"http/1.1"),
+          (true, Version::Http2) => danger_no_cert_verifier_tls_config!(b"h2"),
+          (false, Version::Http10) => tls_config!(b"http/1.0"),
+          (false, Version::Http11) => tls_config!(b"http/1.1"),
+          (false, Version::Http2) => tls_config!(b"h2"),
         };
 
-        #[static_init::dynamic]
-        static DANGER_NO_CERT_VERIFIER_TLS_CONFIG: ClientConfig = {
-          rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
-            .with_safe_default_protocol_versions()
-            .expect("cannot build tls client config with default protocols")
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
-            .with_no_client_auth()
-        };
-
-        let mut tls_config = match key.accept_invalid_certs {
-          true => DANGER_NO_CERT_VERIFIER_TLS_CONFIG.clone(),
-          false => TLS_CONFIG.clone(),
-        };
-
-        tls_config.alpn_protocols = match key.version {
-          Version::Http10 => vec![b"http/1.0".to_vec()],
-          Version::Http11 => vec![b"http/1.1".to_vec()],
-          Version::Http2 => vec![b"h2".to_vec()],
-        };
-
-        let tls_connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+        let tls_connector = tokio_rustls::TlsConnector::from(tls_config);
         
         let sni = match &key.sni {
           Some(sni) => sni.0.clone(),
-          None => pki_types::ServerName::try_from(key.host.clone())
+          None => pki_types::ServerName::try_from(key.host.to_string())
             .map_err( ConnectError::InvalidUriHost)?
         };
 
@@ -586,7 +611,7 @@ impl Pool {
     };
 
     let host = match request.uri().host() {
-      Some(host) => host.to_string(),
+      Some(host) => url::Host::parse(host)?.to_owned(),
       None => return Err(ClientError::InvalidUriMissingHost),
     };
 
@@ -663,131 +688,142 @@ impl Pool {
               .await
               .map_err(ClientError::SendRequest)?;
 
-            // in http/1.0 each connections can be used only once
-            // so there's no need to re-insert the sender into the pool
-            let can_reuse_connection =
-              key.version != Version::Http10 && response_is_keep_alive(response.version(), response.headers());
-
-            if can_reuse_connection {
-              let (parts, mut incoming) = response.into_parts();
-
-              // opt1: channel, this seems to be very slow
-              // let (body, mut sender) = Body::channel();
-
-              // tokio::spawn(async move {
-              //   loop {
-              //     match incoming.frame().await {
-              //       None => break,
-              //       Some(Err(e)) => {
-              //         let _ = sender.send(Err(e.into())).await;
-              //         return;
-              //       },
-              //       Some(Ok(frame)) => {
-              //         match sender.send(Ok(frame)).await {
-              //           Ok(()) => continue,
-              //           Err(_) => {
-              //             return;
-              //           }
-              //         }
-              //       },
-              //     }
-              //   }
-
-              //   let sender = Sender {
-              //     send: SendRequest::Http1(send),
-              //     uid,
-              //   };
-
-              //   log::warn!("resinserting connection into the pool");
-              //   pool.insert(key, sender);
-              // });
-
-              // Response::from_parts(parts, body)
-
-              // opt2: reinsert on drop
-              // let errored = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-              // let reinsert = defer::defer({
-              //   let errored = errored.clone();
-
-              //   move || {
-              //     if errored.load(Ordering::Acquire) {
-              //       return;
-              //     }
-
-              //     let sender = Sender {
-              //       send: SendRequest::Http1(send),
-              //       uid,
-              //     };
-
-              //     log::debug!("resinserting connection into the pool");
-
-              //     pool.insert(key, sender);
-              //   }
-              // });
-
-              // let stream = async_stream::stream! {
-
-              //  loop {
-              //   let next = incoming.frame().await;
-              //     match next {
-              //       None => break ,
-              //       Some(Ok(frame)) => yield Ok(frame),
-              //       Some(Err(e)) => {
-              //         errored.store(true, Ordering::Release);
-              //         yield Err(e.into());
-              //         break;
-              //       }
-              //     }
-              //   }
-
-              //   drop(reinsert);
-              // };
-
-
-              // opt3: reinsert before yielding last frame
-              // seems that if the stream is ended the poll for None is not called from hyper
-              let stream = async_stream::stream! {
-
-                use hyper::body::Body as HyperBody;
-
-                'stream: {
-                  let last_frame = 'items: loop {
-                    match incoming.frame().await {
-                      None => break 'items None,
-                      Some(Ok(frame)) => {
-                        if incoming.is_end_stream() {
-                          break 'items Some(frame)
-                        } else {
-                          yield Ok(frame);
-                        }
-                      },
-                      Some(Err(e)) => {
-                        yield Err(ProxyHttpError::IncomingBody(e));
-                        break 'stream;
-                      }
-                    }
-                  };
-
-                  let sender = Sender {
-                    send: SendRequest::Http1(send),
-                    uid,
-                  };
-
-                  log::debug!("resinserting connection into the pool");
-
-                  pool.insert(key, sender);
-
-                  if let Some(frame) = last_frame {
-                    yield Ok(frame);
-                  }
-                }
+            if response.body().is_end_stream() {
+              let sender = Sender {
+                send: SendRequest::Http1(send),
+                uid,
               };
-
-              Response::from_parts(parts, Body::stream(stream))
+              pool.insert(key, sender);
+              let (parts, inconming) = response.into_parts();
+              Response::from_parts(parts, Body::incoming(inconming))
             } else {
-              let (parts, incoming) = response.into_parts();
-              Response::from_parts(parts, Body::incoming(incoming))
+
+              // in http/1.0 each connection can be used only once
+              // so there's no need to re-insert the sender into the pool
+              let can_reuse_connection =
+                key.version != Version::Http10 && response_is_keep_alive(response.version(), response.headers());
+
+              if can_reuse_connection {
+                let (parts, mut incoming) = response.into_parts();
+
+                // opt1: channel, this seems to be very slow
+                // let (body, mut sender) = Body::channel();
+
+                // tokio::spawn(async move {
+                //   loop {
+                //     match incoming.frame().await {
+                //       None => break,
+                //       Some(Err(e)) => {
+                //         let _ = sender.send(Err(e.into())).await;
+                //         return;
+                //       },
+                //       Some(Ok(frame)) => {
+                //         match sender.send(Ok(frame)).await {
+                //           Ok(()) => continue,
+                //           Err(_) => {
+                //             return;
+                //           }
+                //         }
+                //       },
+                //     }
+                //   }
+
+                //   let sender = Sender {
+                //     send: SendRequest::Http1(send),
+                //     uid,
+                //   };
+
+                //   log::warn!("resinserting connection into the pool");
+                //   pool.insert(key, sender);
+                // });
+
+                // Response::from_parts(parts, body)
+
+                // opt2: reinsert on drop
+                // let errored = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+                // let reinsert = defer::defer({
+                //   let errored = errored.clone();
+
+                //   move || {
+                //     if errored.load(Ordering::Acquire) {
+                //       return;
+                //     }
+
+                //     let sender = Sender {
+                //       send: SendRequest::Http1(send),
+                //       uid,
+                //     };
+
+                //     log::debug!("resinserting connection into the pool");
+
+                //     pool.insert(key, sender);
+                //   }
+                // });
+
+                // let stream = async_stream::stream! {
+
+                //  loop {
+                //   let next = incoming.frame().await;
+                //     match next {
+                //       None => break ,
+                //       Some(Ok(frame)) => yield Ok(frame),
+                //       Some(Err(e)) => {
+                //         errored.store(true, Ordering::Release);
+                //         yield Err(e.into());
+                //         break;
+                //       }
+                //     }
+                //   }
+
+                //   drop(reinsert);
+                // };
+
+
+                // opt3: reinsert before yielding last frame
+                // seems that if the stream is ended the poll for None is not called from hyper
+                let stream = async_stream::stream! {
+
+                  use hyper::body::Body as HyperBody;
+
+                  'stream: {
+                    let last_frame = 'items: loop {
+                      match incoming.frame().await {
+                        None => break 'items None,
+                        Some(Ok(frame)) => {
+                          if incoming.is_end_stream() {
+                            break 'items Some(frame)
+                          } else {
+                            yield Ok(frame);
+                          }
+                        },
+                        Some(Err(e)) => {
+                          yield Err(ProxyHttpError::IncomingBody(e));
+                          break 'stream;
+                        }
+                      }
+                    };
+
+                    let sender = Sender {
+                      send: SendRequest::Http1(send),
+                      uid,
+                    };
+
+                    log::debug!("resinserting connection into the pool");
+
+                    pool.insert(key, sender);
+
+                    if let Some(frame) = last_frame {
+                      yield Ok(frame);
+                    }
+                  }
+                };
+
+                Response::from_parts(parts, Body::stream(stream))
+              } else {
+                let (parts, incoming) = response.into_parts();
+                Response::from_parts(parts, Body::incoming(incoming))
+              }
             }
           }
 
@@ -893,6 +929,9 @@ pub enum ClientError {
   #[error("send invalid uri: {0}")]
   InvalidUri(#[from] hyper::http::uri::InvalidUriParts),
 
+  #[error("invalid host parse: {0}")]
+  InvalidHost(#[from] url::ParseError),
+
   #[error("invalid protocol: {0:?}")]
   InvalidProtocol(Option<String>),
 
@@ -925,6 +964,7 @@ pub enum ClientError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClientErrorKind {
   InvalidUri,
+  InvalidHost,
   InvalidProtocol,
   InvalidVersion,
   InvalidUriMissingHost,
@@ -937,6 +977,7 @@ impl ClientErrorKind {
     use ClientErrorKind as E;
     match self {
       E::InvalidUri => ErrorOriginator::Config,
+      E::InvalidHost => ErrorOriginator::Config,
       E::InvalidProtocol => ErrorOriginator::Config,
       E::InvalidVersion => ErrorOriginator::Config,
       E::InvalidUriMissingHost => ErrorOriginator::Config,
@@ -949,6 +990,7 @@ impl ClientErrorKind {
     use ClientErrorKind as E;
     match self {
       E::InvalidUri => StatusCode::BAD_REQUEST,
+      E::InvalidHost => StatusCode::BAD_REQUEST,
       E::InvalidProtocol => StatusCode::BAD_REQUEST,
       E::InvalidVersion => StatusCode::BAD_REQUEST,
       E::InvalidUriMissingHost => StatusCode::BAD_REQUEST,
@@ -964,6 +1006,7 @@ impl ClientError {
    */
   pub fn kind(&self) -> ClientErrorKind {
     match self {
+      ClientError::InvalidHost(_) => ClientErrorKind::InvalidHost,
       ClientError::InvalidUri(_) => ClientErrorKind::InvalidUri,
       ClientError::InvalidProtocol(_) => ClientErrorKind::InvalidProtocol,
       ClientError::InvalidVersion(_) => ClientErrorKind::InvalidVersion,

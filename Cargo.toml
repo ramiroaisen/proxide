@@ -22,7 +22,7 @@ full = [
   "client-log",
   "interpolation",
   "compression-all-algos",
-  # "stats",
+  "stats",
 ]
 stats = []
 human-panic = ["dep:human-panic"]
