@@ -1,12 +1,15 @@
 #![allow(unused)]
 
 use hyper::body::Incoming;
-use hyper_util::{client::legacy::{connect::HttpConnector, Client}, rt::TokioExecutor};
+use hyper_util::{
+  client::legacy::{connect::HttpConnector, Client},
+  rt::TokioExecutor,
+};
 use proxide::body::Body;
 use tokio::runtime::{Builder, Runtime};
 
 use reqwest_websocket::{RequestBuilderExt, WebSocket};
-use tower::Service;
+use tower::{Service, ServiceExt};
 
 pub fn runtime() -> Runtime {
   Builder::new_multi_thread().enable_all().build().unwrap()
@@ -16,11 +19,15 @@ pub fn client() -> Client<HttpConnector, Body> {
   hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build_http()
 }
 
-pub async fn send(req: hyper::Request<Body>) -> Result<hyper::Response<Incoming>, hyper_util::client::legacy::Error> {
+pub async fn send(
+  req: hyper::Request<Body>,
+) -> Result<hyper::Response<Incoming>, hyper_util::client::legacy::Error> {
   client().request(req).await
 }
 
-pub async fn get(uri: &str) -> Result<hyper::Response<Incoming>, hyper_util::client::legacy::Error> {
+pub async fn get(
+  uri: &str,
+) -> Result<hyper::Response<Incoming>, hyper_util::client::legacy::Error> {
   let request = hyper::Request::builder()
     .method("GET")
     .uri(uri)
@@ -46,6 +53,7 @@ pub async fn https_request(request: reqwest::Request) -> Result<reqwest::Respons
     .build()
     .unwrap();
 
+  client.ready().await.unwrap();
   client.call(request).await
 }
 
@@ -83,7 +91,7 @@ macro_rules! lock {
   ($path:literal) => {
     $crate::lock!();
     $crate::launch!($path);
-  }
+  };
 }
 
 #[macro_export]
@@ -141,7 +149,7 @@ macro_rules! launch {
 }
 
 #[macro_export]
-macro_rules! assert_status { 
+macro_rules! assert_status {
   ($response:expr, $status:ident) => {
     assert_eq!($response.status(), hyper::StatusCode::$status);
   };
@@ -149,7 +157,7 @@ macro_rules! assert_status {
   ($response:expr, $status:ident, $($tt:tt)*) => {
     assert_eq!($response.status(), hyper::StatusCode::$status, $($tt)*);
   };
-  
+
   ($response:expr, $status:expr) => {
     assert_eq!($response.status(), $status);
   };
@@ -168,14 +176,14 @@ macro_rules! assert_status {
 }
 
 #[macro_export]
-macro_rules! assert_header { 
+macro_rules! assert_header {
   ($response:expr, $header:expr, $value:expr) => {
     assert_eq!($response.headers().get($header).unwrap(), $value);
   };
 
   ($response:expr, $header:expr, $value:expr, $($tt:tt)*) => {
     assert_eq!($response.headers().get($header).unwrap(), $value, $($tt)*);
-  };  
+  };
 }
 
 #[macro_export]
@@ -226,7 +234,7 @@ pub fn dir() -> Dir {
   let rand: u64 = rand::random();
   let dir = tmp.join(format!("proxide-test-{rand}"));
   std::fs::create_dir_all(&dir).unwrap();
-  
+
   let path = dir.to_str().unwrap();
 
   #[cfg(not(windows))]
@@ -238,4 +246,4 @@ pub fn dir() -> Dir {
   {
     Dir(path.replace('\\', "/"))
   }
-} 
+}

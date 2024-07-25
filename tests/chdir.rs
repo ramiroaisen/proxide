@@ -2,7 +2,6 @@ mod common;
 use common::dir;
 use common::{block_on, get};
 
-#[cfg(unix)]
 #[test]
 fn chdir() {
   use std::{thread, time::Duration};
