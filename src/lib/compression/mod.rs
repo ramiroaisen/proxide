@@ -29,12 +29,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufRead, AsyncRead};
 
-use crate::body::Body;
 use crate::config::Compress;
 use crate::proxy::error::ProxyHttpError;
 use crate::util::trim;
-
-const MIN_COMPRESS_SIZE: u64 = 128;
+use crate::{body::Body, serde::content_type::ContentTypeMatcher};
 
 #[cfg(feature = "compression-br")]
 const CONTENT_ENCODING_BR: HeaderValue = HeaderValue::from_static("br");
@@ -176,6 +174,8 @@ pub fn select_encoding(
 
 pub fn should_compress(
   server_encodings: &[Compress],
+  content_type_matchers: &[ContentTypeMatcher],
+  min_size: u64,
   request_accept_encoding: Option<&HeaderValue>,
   upstream_status: StatusCode,
   upstream_body_size_hint: SizeHint,
@@ -191,12 +191,8 @@ pub fn should_compress(
   }
 
   if let Some(upper) = upstream_body_size_hint.upper() {
-    if upper < MIN_COMPRESS_SIZE {
-      log::debug!(
-        "upper limit under MIN_COMPRESS_SIZE: {} < {}",
-        upper,
-        MIN_COMPRESS_SIZE
-      );
+    if upper < min_size {
+      log::debug!("upper limit under min_size: {} < {}", upper, min_size);
       return None;
     }
   }
@@ -208,51 +204,11 @@ pub fn should_compress(
     }
   }
 
-  let mime_compressible = 'mime: {
-    match upstream_headers.get(hyper::header::CONTENT_TYPE) {
-      None => break 'mime false,
-      Some(content_type) => {
-        let trimmed = trim(content_type.as_bytes()).split(|&c| c == b';').next()?;
-
-        // TODO: whats the proper name for this variable, the first part of the content type
-        let first_part = trimmed.split(|&c| c == b'/').next()?;
-        if first_part.eq_ignore_ascii_case(b"text") {
-          break 'mime true;
-        }
-
-        // TODO: do not hardcode this,
-        // add this to configuration
-        static MIME_COMPRESSIBLE: &[&[u8]] = &[
-          b"application/json",
-          b"application/javascript",
-          b"application/xml",
-          b"image/svg+xml",
-          b"application/x-javascript",
-          b"application/manifest+json",
-          b"application/vnd.api+json",
-          b"application/xhtml+xml",
-          b"application/rss+xml",
-          b"application/atom+xml",
-          b"application/vnd.ms-fontobject",
-          b"application/x-font-ttf",
-          b"application/x-font-opentype",
-          b"application/x-font-truetype",
-          b"image/x-icon",
-          b"image/vnd.microsoft.icon",
-          b"font/ttf",
-          b"font/eot",
-          b"font/otf",
-          b"font/opentype",
-        ];
-
-        for mime in MIME_COMPRESSIBLE {
-          if trimmed.eq_ignore_ascii_case(mime) {
-            break 'mime true;
-          }
-        }
-
-        break 'mime false;
-      }
+  let mime_compressible = match upstream_headers.get(hyper::header::CONTENT_TYPE) {
+    None => false,
+    Some(content_type) => {
+      let bytes = content_type.as_bytes();
+      content_type_matchers.iter().any(|item| item.matches(bytes))
     }
   };
 
@@ -264,7 +220,7 @@ pub fn should_compress(
     return None;
   }
 
-  let enc = { select_encoding(server_encodings, request_accept_encoding) };
+  let enc = select_encoding(server_encodings, request_accept_encoding);
 
   log::debug!("selected encoding: {:?}", enc);
 
@@ -340,6 +296,10 @@ pub fn compress_body(source: Body, enc: Compress) -> Body {
 mod test {
 
   use super::*;
+
+  use crate::config::defaults::{
+    DEFAULT_COMPRESSION, DEFAULT_COMPRESSION_CONTENT_TYPES, DEFAULT_COMPRESSION_MIN_SIZE,
+  };
 
   macro_rules! value {
     ($value:expr) => {
@@ -581,11 +541,11 @@ mod test {
   #[cfg(feature = "compression-gzip")]
   #[test]
   fn should_compress_with_text_plain_and_identity() {
-    use crate::config::defaults::DEFAULT_COMPRESSION;
-
     let headers = headers! { "content-type" => "text/plain", "content-encoding" => "identity" };
     let encoding = should_compress(
       DEFAULT_COMPRESSION,
+      DEFAULT_COMPRESSION_CONTENT_TYPES,
+      DEFAULT_COMPRESSION_MIN_SIZE,
       Some(&value!("gzip")),
       StatusCode::OK,
       SizeHint::with_exact(1000),
@@ -597,11 +557,11 @@ mod test {
   #[cfg(feature = "compression-gzip")]
   #[test]
   fn should_compress_with_text_plain_none() {
-    use crate::config::defaults::DEFAULT_COMPRESSION;
-
     let headers = headers! { "content-type" => "text/plain" };
     let encoding = should_compress(
       DEFAULT_COMPRESSION,
+      DEFAULT_COMPRESSION_CONTENT_TYPES,
+      DEFAULT_COMPRESSION_MIN_SIZE,
       Some(&value!("gzip")),
       StatusCode::OK,
       SizeHint::with_exact(1000),

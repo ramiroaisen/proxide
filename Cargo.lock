@@ -475,6 +475,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-str"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3618cccc083bb987a415d85c02ca6c9994ea5b44731ec28b9ecf09658655fba9"
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1781,6 +1787,7 @@ dependencies = [
  "chrono",
  "clap",
  "console-subscriber",
+ "const-str",
  "defer",
  "derivative",
  "env_logger",

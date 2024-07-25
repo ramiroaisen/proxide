@@ -1,3 +1,4 @@
+pub mod content_type;
 pub mod duration;
 pub mod header_name;
 pub mod header_value;
