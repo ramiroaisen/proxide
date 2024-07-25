@@ -1,4 +1,5 @@
-#![cfg(asd)]
+#![allow(non_camel_case_types)] // silence #[dynamic] warning
+#![allow(non_upper_case_globals)] // silence #[dynamic] warning
 
 use derivative::Derivative;
 use http::StatusCode;
@@ -8,16 +9,16 @@ use hyper::client::conn;
 use hyper::{Request as HyperRequest, Response as HyperResponse};
 use hyper_rustls::ConfigBuilderExt;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use once_cell::sync::Lazy;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use rustls::{pki_types, ClientConfig};
 use tokio::io::AsyncWriteExt;
 use tokio_util::time::FutureExt;
 use url::Host;
+use std::fmt::Debug;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{
-  collections::{HashMap, VecDeque},
+  collections::VecDeque,
   fmt::Display,
   sync::{
     atomic::AtomicUsize,
@@ -48,10 +49,19 @@ type Response = HyperResponse<Body>;
 type Request = HyperRequest<Body>;
 
 type SenderDeque = VecDeque<Sender>;
-type SenderMap = HashMap<Key, Arc<Mutex<SenderDeque>>>;
 
 type Http1SendRequest = conn::http1::SendRequest<Body>;
 type Http2SendRequest = conn::http2::SendRequest<Body>;
+
+pub struct UpstreamPool {
+  deque: Mutex<SenderDeque>,
+}
+
+impl Debug for UpstreamPool {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("UpstreamPool").finish()
+  }
+}
 
 static CONNECTION_UID: AtomicUsize = AtomicUsize::new(0);
 
@@ -255,7 +265,7 @@ impl Sender {
     read_counter: &Arc<AtomicU64>,
     #[cfg(feature = "stats")]
     write_counter: &Arc<AtomicU64>,
-    weak: Weak<RwLock<SenderMap>>
+    weak: Weak<UpstreamPool> 
   ) -> Result<Self, ConnectError> {
     let connect = match &key.host {
       Host::Domain(domain) => TcpStream::connect((domain.as_str(), key.port)).await,
@@ -311,7 +321,7 @@ impl Sender {
             tokio::spawn(async move {
               let _ = conn.with_upgrades().await;
               log::debug!("tcp http1 connection {} closed", uid);
-              connection_end(weak, &key, uid);
+              connection_end(weak, uid);
             });
 
             let send = SendRequest::Http1(conn_send);
@@ -337,7 +347,7 @@ impl Sender {
             tokio::spawn(async move {
               let _ = conn.await;
               log::debug!("tcp http2 connection {} closed", uid);
-              connection_end(weak, &key, uid);
+              connection_end(weak, uid);
             });
 
             let send = SendRequest::Http2(conn_send);
@@ -432,7 +442,7 @@ impl Sender {
             tokio::spawn(async move {
               let _ = conn.with_upgrades().await;
               log::debug!("ssl http2 connection {} closed", uid);
-              connection_end(weak, &key, uid);
+              connection_end(weak, uid);
             });
 
             let send = SendRequest::Http1(conn_send);
@@ -457,7 +467,7 @@ impl Sender {
             tokio::spawn(async move {
               let _ = conn.await;
               log::debug!("tls http2 connection {} closed", uid);
-              connection_end(weak, &key, uid);
+              connection_end(weak, uid);
             });
 
             let send = SendRequest::Http2(conn_send);
@@ -472,50 +482,27 @@ impl Sender {
 }
 
 
-/**
- * A connection pool. \
- * The pool uses an [`Arc`] internally so it can be safely shared and cloned. \  
- */
-#[derive(Derivative, Clone)]
-#[derivative(Debug)]
-pub struct Pool {
-  #[derivative(Debug = "ignore")]
-  map: Arc<RwLock<SenderMap>>,
-}
-
-impl Pool {
+impl UpstreamPool {
   /**
    * Create a new connection pool.
    */
   fn new() -> Self {
-    let map = Arc::new(RwLock::new(SenderMap::new()));
-    Self { map }
+    let deque = Mutex::new(SenderDeque::new());
+    Self { deque }
   }
 
   /**
    * (re)inert a Sender into the pool. 
    */
-  pub fn insert(&self, key: Key, sender: Sender) {
-    let list = {
-      let map_read = self.map.read();
-      match map_read.get(&key) {
-        Some(list) => list.clone(),
-        None => {
-          drop(map_read);
-          let mut map_write = self.map.write();
-          map_write.entry(key).or_default().clone()
-        }
-      }
-    };
-
-    list.lock().push_back(sender);
+  pub fn insert(&self, sender: Sender) {
+    self.deque.lock().push_back(sender);
   }
 
   /**
    * Get a sender from the pool. \
    */
   pub async fn get(
-    &self,
+    self: &Arc<Self>,
     key: &Key,
     #[cfg(feature = "stats")]
     read_counter: &Arc<AtomicU64>,
@@ -537,36 +524,28 @@ impl Pool {
       return Ok(sender);
     }
 
-    'deque: {
-      let deque = {
-        let map = self.map.read();
-        match map.get(key) {
-          None => break 'deque,
-          Some(deque) => deque.clone(),
-        }
-      };
-
-      loop {
-        let mut sender = match deque.lock().pop_front() {
+    'deque: loop {
+      let mut sender = {
+        match self.deque.lock().pop_front() {
           Some(sender) => sender,
           None => break 'deque,
-        };
-      
-        match sender.ready().await {
-          Ok(()) => {
-            log::debug!("sender ready ok");
-            return Ok(sender);
-          }
+        }
+      };
+    
+      match sender.ready().await {
+        Ok(()) => {
+          log::debug!("sender ready ok");
+          return Ok(sender);
+        }
 
-          Err(e) => {
-            log::warn!("sender ready err: {e} - {e:?}");
-            continue;
-          }
+        Err(e) => {
+          log::warn!("sender ready err: {e} - {e:?}");
+          continue;
         }
       }
-    };
+    }
 
-    let weak = Arc::downgrade(&self.map);
+    let weak = Arc::downgrade(self);
     let sender = Sender::connect(
       key.clone(),
       #[cfg(feature = "stats")]
@@ -586,7 +565,7 @@ impl Pool {
    */
   #[allow(clippy::too_many_arguments)]
   pub async fn send_request(
-    &self,
+    self: &Arc<Self>,
     mut request: Request,
     sni: Option<Sni>,
     accept_invalid_certs: bool,
@@ -695,7 +674,7 @@ impl Pool {
                 send: SendRequest::Http1(send),
                 uid,
               };
-              pool.insert(key, sender);
+              pool.insert(sender);
               let (parts, inconming) = response.into_parts();
               Response::from_parts(parts, Body::incoming(inconming))
             } else {
@@ -813,7 +792,7 @@ impl Pool {
 
                     log::debug!("resinserting connection into the pool");
 
-                    pool.insert(key, sender);
+                    pool.insert(sender);
 
                     if let Some(frame) = last_frame {
                       yield Ok(frame);
@@ -835,7 +814,7 @@ impl Pool {
               uid,
             };
 
-            pool.insert(key, sender);
+            pool.insert(sender);
             
             let response = send
               .send_request(request)
@@ -886,6 +865,28 @@ impl Pool {
     .unwrap()
   }
 
+  /**
+   * Check if the upstream is healthy.\
+   * This will only check if the upstream is reachable and the connection and hanshake can be made.\
+   * It will not send a request or check that the upstreams returns a somewhat valid response.\
+   */
+  pub async fn healthcheck(&self, key: Key) -> Result<(), ConnectError> {
+    #[cfg(feature = "stats")]
+    let read_counter = Arc::new(AtomicU64::new(0));
+    #[cfg(feature = "stats")]
+    let write_counter = Arc::new(AtomicU64::new(0));
+    let mut sender = Sender::connect(
+      key,
+      #[cfg(feature = "stats")]
+      &read_counter,
+      #[cfg(feature = "stats")]
+      &write_counter,
+      Weak::default()
+    ).await?;
+    sender.ready().await?;
+    Ok(())
+  }
+
   #[cfg(feature = "log-state")]
   pub fn log(&self) {
     let map = self.map.read();
@@ -896,31 +897,24 @@ impl Pool {
   }
 }
 
-impl Default for Pool {
+fn connection_end(weak: Weak<UpstreamPool>, uid: usize) {
+  let pool = match weak.upgrade() {
+    Some(arc) => arc,
+    None => return,
+  };
+
+  let mut deque = pool.deque.lock();
+  if let Some(i) = deque.iter().position(|item| item.uid == uid) {
+    deque.remove(i);
+  }  
+}
+
+impl Default for UpstreamPool {
   fn default() -> Self {
     Self::new()
   }
 }
 
-fn connection_end(weak: Weak<RwLock<SenderMap>>, key: &Key, uid: usize) {
-  let arc = match weak.upgrade() {
-    Some(arc) => arc,
-    None => return,
-  };
-
-  let list = {
-    let lock = arc.read();
-    match lock.get(key) {
-      Some(list) => list.clone(),
-      None => return,
-    }
-  };
-
-  let mut list = list.lock();
-  if let Some(i) = list.iter().position(|item| item.uid == uid) {
-    list.remove(i);
-  };
-}
 
 /**
  * The error returned by [`Pool::send_request`] and [`send_request`].\
@@ -1087,70 +1081,6 @@ fn remove_authority(uri: &mut hyper::Uri) -> Result<(), hyper::http::uri::Invali
 
   *uri = target;
 
-  Ok(())
-}
-
-static GLOBAL_POOL: Lazy<Pool> = Lazy::new(Pool::new);
-
-/**
- * Send a request using the global pool.\
- * On first usage, the global pool will be initialized.\
- * see [`Pool::send_request`] for more information.
- */
-#[allow(clippy::too_many_arguments)]
-pub async fn send_request(
-  request: Request,
-  sni: Option<Sni>,
-  accept_invalid_certs: bool,
-  #[cfg(feature = "stats")]
-  read_counter: &Arc<AtomicU64>,
-  #[cfg(feature = "stats")]
-  write_counter: &Arc<AtomicU64>,
-  read_timeout: Option<Duration>,
-  write_timeout: Option<Duration>,
-  proxy_protocol_config: Option<ProxyProtocolConfig>
-) -> Result<Response, ClientError> {
-  GLOBAL_POOL.send_request(
-    request,
-    sni,
-    accept_invalid_certs,
-    #[cfg(feature = "stats")]
-    read_counter,
-    #[cfg(feature = "stats")]
-    write_counter,
-    read_timeout,
-    write_timeout,
-    proxy_protocol_config
-  ).await
-}
-
-/**
- * utility function to that prints logs the internal state of the global pool 
- */
-#[cfg(feature = "log-state")]
-pub fn log() {
-  GLOBAL_POOL.log();
-}
-
-/**
- * Check if the upstream is healthy.\
- * This will only check if the upstream is reachable and the connection and hanshake can be made.\
- * It will not send a request or check that the upstreams returns a somewhat valid response.\
- */
-pub async fn healthcheck(key: Key) -> Result<(), ConnectError> {
-  #[cfg(feature = "stats")]
-  let read_counter = Arc::new(AtomicU64::new(0));
-  #[cfg(feature = "stats")]
-  let write_counter = Arc::new(AtomicU64::new(0));
-  let mut sender = Sender::connect(
-    key,
-    #[cfg(feature = "stats")]
-    &read_counter,
-    #[cfg(feature = "stats")]
-    &write_counter,
-    Weak::default()
-  ).await?;
-  sender.ready().await?;
   Ok(())
 }
 

@@ -33,8 +33,7 @@ use super::header::CONNECTION_UPGRADE;
 use super::util::{remove_hop_headers, resolve_host_port};
 use crate::backoff::BackOff;
 use crate::body::{map_request_body, Body};
-use crate::client::pool::ProxyProtocolConfig;
-use crate::client::send_request;
+use crate::client::upstream_pool::ProxyProtocolConfig;
 use crate::config::defaults::{
   DEFAULT_HTTP_BALANCE, DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_RETRIES,
   DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_HTTP_RETRY_BACKOFF,
@@ -702,19 +701,21 @@ pub async fn serve_proxy(
 
           let open_connections_guard =
             increment_open_connections(upstream.state_open_connections.clone());
-          let upstream_response = match send_request(
-            proxy_request,
-            proxy_sni,
-            upstream.danger_accept_invalid_certs,
-            #[cfg(feature = "stats")]
-            &upstream.stats_total_read_bytes,
-            #[cfg(feature = "stats")]
-            &upstream.stats_total_write_bytes,
-            Some(read_timeout),
-            Some(write_timeout),
-            proxy_protocol_config,
-          )
-          .await
+          let upstream_response = match upstream
+            .pool
+            .send_request(
+              proxy_request,
+              proxy_sni,
+              upstream.danger_accept_invalid_certs,
+              #[cfg(feature = "stats")]
+              &upstream.stats_total_read_bytes,
+              #[cfg(feature = "stats")]
+              &upstream.stats_total_write_bytes,
+              Some(read_timeout),
+              Some(write_timeout),
+              proxy_protocol_config,
+            )
+            .await
           {
             Ok(response) => {
               upstream.state_health.store(true, Ordering::Relaxed);
@@ -874,19 +875,21 @@ pub async fn serve_proxy(
 
             open_connections_guard =
               increment_open_connections(upstream.state_open_connections.clone());
-            match send_request(
-              proxy_request,
-              proxy_sni,
-              upstream.danger_accept_invalid_certs,
-              #[cfg(feature = "stats")]
-              &upstream.stats_total_read_bytes,
-              #[cfg(feature = "stats")]
-              &upstream.stats_total_write_bytes,
-              Some(read_timeout),
-              Some(write_timeout),
-              proxy_protocol_config,
-            )
-            .await
+            match upstream
+              .pool
+              .send_request(
+                proxy_request,
+                proxy_sni,
+                upstream.danger_accept_invalid_certs,
+                #[cfg(feature = "stats")]
+                &upstream.stats_total_read_bytes,
+                #[cfg(feature = "stats")]
+                &upstream.stats_total_write_bytes,
+                Some(read_timeout),
+                Some(write_timeout),
+                proxy_protocol_config,
+              )
+              .await
             {
               Ok(response) => {
                 upstream.state_health.store(true, Ordering::Relaxed);
@@ -916,19 +919,21 @@ pub async fn serve_proxy(
 
             open_connections_guard =
               increment_open_connections(upstream.state_open_connections.clone());
-            match send_request(
-              proxy_request,
-              proxy_sni,
-              upstream.danger_accept_invalid_certs,
-              #[cfg(feature = "stats")]
-              &upstream.stats_total_read_bytes,
-              #[cfg(feature = "stats")]
-              &upstream.stats_total_write_bytes,
-              Some(read_timeout),
-              Some(write_timeout),
-              proxy_protocol_config,
-            )
-            .await
+            match upstream
+              .pool
+              .send_request(
+                proxy_request,
+                proxy_sni,
+                upstream.danger_accept_invalid_certs,
+                #[cfg(feature = "stats")]
+                &upstream.stats_total_read_bytes,
+                #[cfg(feature = "stats")]
+                &upstream.stats_total_write_bytes,
+                Some(read_timeout),
+                Some(write_timeout),
+                proxy_protocol_config,
+              )
+              .await
             {
               Ok(response) => {
                 upstream.state_health.store(true, Ordering::Relaxed);

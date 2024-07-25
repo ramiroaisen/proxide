@@ -1,4 +1,4 @@
-use crate::client::pool::{ClientError, ClientErrorKind};
+use crate::client::upstream_pool::{ClientError, ClientErrorKind};
 use http::StatusCode;
 use hyper::{header::CONTENT_TYPE, http::uri::InvalidUri, Response};
 

@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
   cli::args,
-  client::pool::Key,
+  client::upstream_pool::Key,
   config::{
     self,
     defaults::{
@@ -797,12 +797,13 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
             })?;
 
             tokio::spawn({
+              let pool = upstream.pool.clone();
               let upstream_health = upstream.state_health.clone();
               let cancelled = cancel_token.clone().cancelled_owned();
               async move {
                 tokio::select! {
                   _ = cancelled => log::info!("received shutdown signal, stopping upstream healthcheck task for {key}"),
-                  never = upstream_healthcheck_task(key.clone(), upstream_health) => match never {}
+                  never = upstream_healthcheck_task(pool, key.clone(), upstream_health) => match never {}
                 }
               }
             });

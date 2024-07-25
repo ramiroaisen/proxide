@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use server_name::ServerName;
 
 use crate::backoff::BackOff;
+use crate::client::upstream_pool::UpstreamPool;
 #[cfg(any(
   feature = "compression-br",
   feature = "compression-zstd",
@@ -443,6 +444,9 @@ pub struct HttpUpstream {
   #[serde(skip, default)]
   #[cfg(feature = "stats")]
   pub stats_total_connections: Arc<AtomicU64>,
+
+  #[serde(skip, default)]
+  pub pool: Arc<UpstreamPool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

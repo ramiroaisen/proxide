@@ -1,2 +1,1 @@
-pub mod pool;
-pub use pool::send_request;
+pub mod upstream_pool;
