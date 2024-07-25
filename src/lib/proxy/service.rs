@@ -23,8 +23,10 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{convert::Infallible, ops::Deref, pin::Pin, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::time::FutureExt;
+use url::Host;
 
 use super::error::ProxyStreamError;
 use super::header::CONNECTION_UPGRADE;
@@ -49,7 +51,6 @@ use crate::proxy::header::{
   HTTP, HTTPS, SERVER_HEADER_VALUE, X_FORWARDED_FOR, X_FORWARDED_HOST, X_FORWARDED_PROTO, X_REAL_IP,
 };
 use crate::proxy_protocol::ProxyHeader;
-use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
@@ -58,6 +59,9 @@ use crate::service::{AddrService, Connection, StreamService};
 use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 use crate::upgrade::{request_connection_upgrade, response_connection_upgrade};
+
+#[allow(unused)]
+use crate::serde::content_type::ContentTypeMatcher;
 
 #[inline(always)]
 #[must_use = "increment_open_connections returns a drop guard"]
@@ -1176,8 +1180,6 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
             }
           };
 
-          let addr = format!("{}:{}", domain, port);
-
           let proxy_read_timeout = crate::option!(
             @timeout
             upstream.proxy_read_timeout,
@@ -1194,7 +1196,14 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
             => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
           );
 
-          let proxy_stream = match tokio::net::TcpStream::connect(addr).await {
+          // unwrap: upstream origin host is checked at construction
+          let connect = match upstream.origin.host().unwrap() {
+            Host::Domain(domain) => TcpStream::connect((domain, port)).await,
+            Host::Ipv4(ipv4) => TcpStream::connect((ipv4, port)).await,
+            Host::Ipv6(ipv6) => TcpStream::connect((ipv6, port)).await,
+          };
+
+          let proxy_stream = match connect {
             Ok(stream) => {
               #[cfg(feature = "stats")]
               upstream

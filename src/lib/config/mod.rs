@@ -26,13 +26,15 @@ use crate::compression::Encoding;
 use crate::log::logfile::LogFileConfig;
 use crate::log::LevelFilter;
 use crate::proxy_protocol::ProxyProtocolVersion;
-use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
 use crate::serde::sni::Sni;
 use crate::serde::status_code::SStatusCode;
 use crate::serde::url::{HttpUpstreamBaseUrl, StreamUpstreamOrigin};
+
+#[allow(unused)]
+use crate::serde::content_type::ContentTypeMatcher;
 
 pub mod listen;
 pub mod matcher;

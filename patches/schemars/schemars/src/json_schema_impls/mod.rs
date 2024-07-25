@@ -1,9 +1,9 @@
 macro_rules! no_ref_schema {
-    () => {
-        fn is_referenceable() -> bool {
-            false
-        }
-    };
+  () => {
+    fn is_referenceable() -> bool {
+      false
+    }
+  };
 }
 
 macro_rules! forward_impl {
@@ -44,7 +44,7 @@ mod array;
 mod arrayvec05;
 #[cfg(feature = "arrayvec07")]
 mod arrayvec07;
-#[cfg(std_atomic)]
+// #[cfg(std_atomic)]
 mod atomic;
 #[cfg(feature = "bytes")]
 mod bytes;
@@ -52,9 +52,9 @@ mod bytes;
 mod chrono;
 mod core;
 #[cfg(any(
-    feature = "rust_decimal",
-    feature = "bigdecimal03",
-    feature = "bigdecimal04"
+  feature = "rust_decimal",
+  feature = "bigdecimal03",
+  feature = "bigdecimal04"
 ))]
 mod decimal;
 #[cfg(feature = "either")]
