@@ -148,7 +148,7 @@ pub async fn serve_http<A, S, B, Sig>(
   write_timeout: Duration,
   graceful_shutdown_timeout: Option<Duration>,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
-  proxy_protocol_read_timeout: Duration
+  proxy_protocol_read_timeout: Duration,
 ) where
   A: AddrService<S>,
   S: Clone,
@@ -169,8 +169,8 @@ pub async fn serve_http<A, S, B, Sig>(
 
   let http = server();
 
-  let (conn_sender, conn_recv) = 
-    kanal::bounded_async::<(GracefulGuard<TcpStream>, SocketAddr, Option<ProxyHeader>)>(0); 
+  let (conn_sender, conn_recv) =
+    kanal::bounded_async::<(GracefulGuard<TcpStream>, SocketAddr, Option<ProxyHeader>)>(0);
 
   let accept_task = {
     let graceful = graceful.clone();
@@ -195,7 +195,7 @@ pub async fn serve_http<A, S, B, Sig>(
             let mut stream = graceful.guard(stream);
 
             let conn_sender = conn_sender.clone();
-            
+
             tokio::spawn(async move {
 
               let proxy_header: Option<ProxyHeader>;
@@ -225,7 +225,7 @@ pub async fn serve_http<A, S, B, Sig>(
                 stream,
                 remote_addr,
                 proxy_header,
-              )).await;     
+              )).await;
             });
           },
 
@@ -236,7 +236,7 @@ pub async fn serve_http<A, S, B, Sig>(
       }
     }
   };
-  
+
   let connection_task = async move {
     loop {
       let (stream, remote_addr, proxy_header) = match conn_recv.recv().await {
@@ -245,10 +245,16 @@ pub async fn serve_http<A, S, B, Sig>(
       };
 
       // no need to graceful.guard() here as it is already guarded after the accept
-      let io = Box::pin(TokioIo::new(TimeoutIo::new(stream, read_timeout, write_timeout)));
+      let io = Box::pin(TokioIo::new(TimeoutIo::new(
+        stream,
+        read_timeout,
+        write_timeout,
+      )));
 
       let service = addr_service.make_service(remote_addr, proxy_header);
-      let conn = http.serve_connection_with_upgrades(io, service).into_owned();
+      let conn = http
+        .serve_connection_with_upgrades(io, service)
+        .into_owned();
       let watched = graceful.watch(conn);
 
       let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Http);
@@ -258,7 +264,7 @@ pub async fn serve_http<A, S, B, Sig>(
         if let Err(e) = watched.await {
           log::warn!("error handling http connection - {e}: {e:?}");
         }
-        drop(guard);     
+        drop(guard);
       });
     }
 
@@ -308,7 +314,11 @@ pub async fn serve_https<A, S, B, Sig>(
 
   tokio::pin!(signal);
 
-  let (conn_sender, conn_recv) = kanal::bounded_async::<(TlsStream<GracefulGuard<TcpStream>>, SocketAddr, Option<ProxyHeader>)>(0);
+  let (conn_sender, conn_recv) = kanal::bounded_async::<(
+    TlsStream<GracefulGuard<TcpStream>>,
+    SocketAddr,
+    Option<ProxyHeader>,
+  )>(0);
 
   let accept_task = {
     let graceful = graceful.clone();
@@ -336,7 +346,7 @@ pub async fn serve_https<A, S, B, Sig>(
             let mut stream = graceful.guard(tcp_stream);
 
             tokio::spawn(async move {
-              
+
               let proxy_header = match expect_proxy_protocol {
                 None => None,
                 Some(version) => match crate::proxy_protocol::read(&mut stream, version).timeout(proxy_protocol_read_timeout).await {
@@ -355,7 +365,7 @@ pub async fn serve_https<A, S, B, Sig>(
               let tls_stream = match tls_acceptor.accept(stream).await {
                 Ok(tls_stream) => tls_stream,
                 Err(e) => {
-                  log::warn!("error accepting https connection: {e}");
+                  log::warn!("error accepting https connection: {e} - {e:?}");
                   return;
                 }
               };
@@ -382,7 +392,11 @@ pub async fn serve_https<A, S, B, Sig>(
       };
 
       // no need to graceful.guard() here as it is already guarded after the accept
-      let io = Box::pin(TokioIo::new(TimeoutIo::new(tls_stream, read_timeout, write_timeout)));
+      let io = Box::pin(TokioIo::new(TimeoutIo::new(
+        tls_stream,
+        read_timeout,
+        write_timeout,
+      )));
 
       let service = addr_service.make_service(remote_addr, proxy_header);
       let conn = http
@@ -453,7 +467,7 @@ pub async fn serve_tcp<S, Sig>(
 
             let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Tcp);
             let guard = connection_start(connection);
-    
+
              tokio::spawn(async move {
               if let Err(e) = fut.await {
                 log::warn!("error handling tcp connection - {e}: {e:?}");
@@ -521,7 +535,8 @@ pub async fn serve_ssl_with_config<S, Sig>(
 {
   tokio::pin!(signal);
 
-  let (conn_sender, conn_recv) = kanal::bounded_async::<(TlsStream<TcpStream>, SocketAddr, Option<ProxyHeader>)>(0);
+  let (conn_sender, conn_recv) =
+    kanal::bounded_async::<(TlsStream<TcpStream>, SocketAddr, Option<ProxyHeader>)>(0);
 
   let tls_acceptor = TlsAcceptor::from(config);
 
@@ -579,7 +594,6 @@ pub async fn serve_ssl_with_config<S, Sig>(
     let graceful = crate::graceful::GracefulShutdown::new();
 
     while let Ok((stream, remote_addr, proxy_header)) = conn_recv.recv().await {
-      
       let graceful_stream = graceful.guard(stream);
 
       let fut = service.serve(Connection {

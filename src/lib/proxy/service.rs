@@ -1,4 +1,6 @@
-#![allow(clippy::declare_interior_mutable_const)]
+#![allow(clippy::declare_interior_mutable_const)] // silence const headers warning
+#![allow(non_camel_case_types)] // silence #[dynamic] warning
+#![allow(non_upper_case_globals)] // silence #[dynamic] warning
 use http::Uri;
 use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderValue, CONNECTION, HOST};
@@ -51,6 +53,8 @@ use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
 use crate::service::{AddrService, Connection, StreamService};
+#[cfg(feature = "stats")]
+use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 use crate::upgrade::{request_connection_upgrade, response_connection_upgrade};
 
@@ -657,6 +661,10 @@ pub async fn serve_proxy(
             proxy_request,
             proxy_sni,
             upstream.danger_accept_invalid_certs,
+            #[cfg(feature = "stats")]
+            &upstream.stats_total_read_bytes,
+            #[cfg(feature = "stats")]
+            &upstream.stats_total_write_bytes,
             Some(read_timeout),
             Some(write_timeout),
             proxy_protocol_config,
@@ -665,6 +673,10 @@ pub async fn serve_proxy(
           {
             Ok(response) => {
               upstream.state_health.store(true, Ordering::Relaxed);
+              #[cfg(feature = "stats")]
+              upstream
+                .stats_total_connections
+                .fetch_add(1, Ordering::Relaxed);
               response
             }
             Err(e) => {
@@ -819,6 +831,10 @@ pub async fn serve_proxy(
               proxy_request,
               proxy_sni,
               upstream.danger_accept_invalid_certs,
+              #[cfg(feature = "stats")]
+              &upstream.stats_total_read_bytes,
+              #[cfg(feature = "stats")]
+              &upstream.stats_total_write_bytes,
               Some(read_timeout),
               Some(write_timeout),
               proxy_protocol_config,
@@ -827,6 +843,10 @@ pub async fn serve_proxy(
             {
               Ok(response) => {
                 upstream.state_health.store(true, Ordering::Relaxed);
+                #[cfg(feature = "stats")]
+                upstream
+                  .stats_total_connections
+                  .fetch_add(1, Ordering::Relaxed);
                 response
               }
               Err(e) => {
@@ -853,6 +873,10 @@ pub async fn serve_proxy(
               proxy_request,
               proxy_sni,
               upstream.danger_accept_invalid_certs,
+              #[cfg(feature = "stats")]
+              &upstream.stats_total_read_bytes,
+              #[cfg(feature = "stats")]
+              &upstream.stats_total_write_bytes,
               Some(read_timeout),
               Some(write_timeout),
               proxy_protocol_config,
@@ -861,6 +885,10 @@ pub async fn serve_proxy(
             {
               Ok(response) => {
                 upstream.state_health.store(true, Ordering::Relaxed);
+                #[cfg(feature = "stats")]
+                upstream
+                  .stats_total_connections
+                  .fetch_add(1, Ordering::Relaxed);
                 response
               }
               Err(mut e) => {
@@ -1121,13 +1149,29 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
             => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
           );
 
-          let mut proxy_stream = match tokio::net::TcpStream::connect(addr).await {
-            Ok(stream) => stream,
+          let proxy_stream = match tokio::net::TcpStream::connect(addr).await {
+            Ok(stream) => {
+              #[cfg(feature = "stats")]
+              upstream
+                .stats_total_connections
+                .fetch_add(1, Ordering::Relaxed);
+              stream
+            }
             Err(e) => {
               last_error = Some(ProxyStreamError::TcpConnect(e));
               continue 'upstreams;
             }
           };
+
+          #[cfg(feature = "stats")]
+          let mut proxy_stream = CountersIo::new(
+            proxy_stream,
+            upstream.stats_total_read_bytes.clone(),
+            upstream.stats_total_write_bytes.clone(),
+          );
+
+          #[cfg(not(feature = "stats"))]
+          let mut proxy_stream = proxy_stream;
 
           if let Some(version) = upstream.send_proxy_protocol {
             let timeout = crate::option!(
@@ -1179,7 +1223,6 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
 
               let tls_connector = match upstream.danger_accept_invalid_certs {
                 true => {
-                  #[allow(non_upper_case_globals)]
                   #[dynamic]
                   static DANGER_TLS_NO_CERT_VERFIER_CONNECTOR: tokio_rustls::TlsConnector = {
                     let config = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -1197,7 +1240,6 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
                 }
 
                 false => {
-                  #[allow(non_upper_case_globals)]
                   #[dynamic]
                   static TLS_CONNECTOR: tokio_rustls::TlsConnector = {
                     let config = rustls::ClientConfig::builder_with_provider(Arc::new(

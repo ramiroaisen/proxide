@@ -2,12 +2,9 @@ use derivative::Derivative;
 use http::StatusCode;
 use http_body_util::BodyExt;
 use hyper::client::conn;
-use hyper::{Request as HyperRequest, Response as HyperResponse, Uri};
+use hyper::{Request as HyperRequest, Response as HyperResponse};
 use hyper_rustls::ConfigBuilderExt;
-use hyper_util::{
-  client::legacy::connect::HttpConnector,
-  rt::{TokioExecutor, TokioIo},
-};
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
 use rustls::{pki_types, ClientConfig};
@@ -24,15 +21,18 @@ use std::{
   }
 };
 use tokio::net::TcpStream;
-use tower::{Service, ServiceExt};
+#[cfg(feature = "stats")]
+use std::atomic::AtomicU64; 
 
 use crate::body::Body;
 use crate::config::{Config, HttpApp, HttpHandle, HttpUpstream, UpstreamVersion};
 use crate::net::timeout::TimeoutIo;
 use crate::config::defaults::{DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT};
 use crate::proxy::error::{ErrorOriginator, ProxyHttpError};
-use crate::proxy_protocol::{self, ProxyHeader, ProxyProtocolConnector, ProxyProtocolConnectorError, ProxyProtocolVersion};
+use crate::proxy_protocol::{self, ProxyHeader, ProxyProtocolVersion};
 use crate::serde::sni::Sni;
+#[cfg(feature = "stats")]
+use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 use crate::upgrade::response_is_keep_alive;
 use crate::tls::crypto;
@@ -245,32 +245,47 @@ impl Sender {
     self.send.ready().await
   }
 
-  pub async fn connect(key: Key, weak: Weak<RwLock<SenderMap>>) -> Result<Self, ConnectError> {
+  pub async fn connect(
+    key: Key,
+    #[cfg(feature = "stats")]
+    read_counter: &Arc<AtomicU64>,
+    #[cfg(feature = "stats")]
+    write_counter: &Arc<AtomicU64>,
+    weak: Weak<RwLock<SenderMap>>
+  ) -> Result<Self, ConnectError> {
     let addr = format!("{}:{}", key.host, key.port);
 
+    let tcp = TcpStream::connect(&addr)
+      .await
+      .map_err(ConnectError::TcpConnect)?;
+    
+    #[cfg(feature = "proxy-tcp-nodelay")]
+    if let Err(e) = tcp.set_nodelay(true) {
+      log::warn!("error setting tcp stream nodelay (client): {e}");
+    }
+
+    #[cfg(feature = "stats")]
+    let mut tcp = CountersIo::new(tcp, read_counter.clone(), write_counter.clone());
+
+    #[cfg(not(feature = "stats"))]
+    let mut tcp = tcp;
+
+    if let Some(proxy_protocol_config) = &key.proxy_protocol {
+      let buf = proxy_protocol::encode(
+        &proxy_protocol_config.header,
+        proxy_protocol_config.version,
+      ).map_err(ConnectError::ProxyProtocolEncode)?;
+
+      tcp.write_all(&buf)
+        .timeout(proxy_protocol_config.timeout)
+        .await
+        .map_err(|_| ConnectError::ProxyProtocolWriteTimeout)?
+        .map_err(ConnectError::ProxyProtocolWrite)?;
+    }
+
     match key.protocol {
+
       Protocol::Http => {
-        let mut tcp = TcpStream::connect(&addr)
-          .await
-          .map_err(ConnectError::TcpConnect)?;
-
-        if let Some(proxy_protocol_config) = &key.proxy_protocol {
-          let buf = proxy_protocol::encode(
-            &proxy_protocol_config.header,
-            proxy_protocol_config.version,
-          ).map_err(ConnectError::ProxyProtocolEncode)?;
-
-          tcp.write_all(&buf)
-            .timeout(proxy_protocol_config.timeout)
-            .await
-            .map_err(|_| ConnectError::ProxyProtocolWriteTimeout)?
-            .map_err(ConnectError::ProxyProtocolWrite)?;
-        }
-
-        #[cfg(feature = "proxy-tcp-nodelay")]
-        if let Err(e) = tcp.set_nodelay(true) {
-          log::warn!("error setting tcp stream nodelay (client): {e}");
-        }
 
         let io = Box::pin(TokioIo::new(TimeoutIo::new(tcp, key.read_timeout, key.write_timeout)));
         
@@ -303,16 +318,6 @@ impl Sender {
           }
 
           Version::Http2 => {
-            let tcp = TcpStream::connect(&addr)
-              .await
-              .map_err(ConnectError::TcpConnect)?;
-
-            #[cfg(feature = "proxy-tcp-nodelay")]
-            if let Err(e) = tcp.set_nodelay(true) {
-              log::warn!("error setting tcp stream nodelay (client): {e}");
-            }
-
-            let io = Box::pin(TokioIo::new(TimeoutIo::new(tcp, key.read_timeout, key.write_timeout)));
 
             let (conn_send, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
               .handshake(io)
@@ -342,17 +347,6 @@ impl Sender {
 
       Protocol::Https => {
 
-        fn http_connector() -> HttpConnector {
-          let mut http = HttpConnector::new();
-          http.enforce_http(false);
-
-          #[cfg(feature = "server-tcp-nodelay")]
-          http.set_nodelay(true);
-
-          #[allow(clippy::let_and_return)]
-          http
-        }
-        
         #[static_init::dynamic]
         static TLS_CONFIG: ClientConfig = {
             rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
@@ -384,53 +378,15 @@ impl Sender {
           Version::Http2 => vec![b"h2".to_vec()],
         };
 
-        let mut proxy_protocol_connector = ProxyProtocolConnector::new(
-          http_connector(),
-          key.proxy_protocol.clone(),
-        );
-
-        // let mut connector = match key.version {
-        //   Version::Http10 | Version::Http11 => {
-        //     hyper_rustls::HttpsConnector::<ProxyProtocolConnector>::builder()
-        //       .with_tls_config(connector_tls_config)
-        //       .https_only()
-        //       .enable_http1()
-        //       .wrap_connector(proxy_protocol_connector)
-        //   }
-
-        //   Version::Http2 => {
-        //     hyper_rustls::HttpsConnector::<ProxyProtocolConnector>::builder()
-        //       .with_tls_config(connector_tls_config)
-        //       .https_only()
-        //       .enable_http2()
-        //       .wrap_connector(proxy_protocol_connector)
-        //   }
-        // };
-
-        let uri = format!("https://{}:{}", key.host, key.port)
-          .parse::<Uri>()
-          .map_err(ConnectError::UriParse)?;
-
-
-        proxy_protocol_connector.ready().await.map_err(ConnectError::HttpsTcpReady)?;
-
-        let stream = proxy_protocol_connector
-          .call(uri)
-          .await
-          .map_err(ConnectError::HttpsTcpConnect)?;
-
-        
         let tls_connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
         
-        // tls_connector.ready().await.map_err(ConnectError::TlsReady)?;
-
         let sni = match &key.sni {
           Some(sni) => sni.0.clone(),
           None => pki_types::ServerName::try_from(key.host.clone())
             .map_err( ConnectError::InvalidUriHost)?
         };
 
-        let tls_stream = tls_connector.connect(sni, TokioIo::new(stream))
+        let tls_stream = tls_connector.connect(sni, tcp)
           .await
           .map_err(ConnectError::TlsConnect)?;
 
@@ -531,12 +487,26 @@ impl Pool {
   /**
    * Get a sender from the pool. \
    */
-  pub async fn get(&self, key: &Key) -> Result<Sender, ConnectError> {
+  pub async fn get(
+    &self,
+    key: &Key,
+    #[cfg(feature = "stats")]
+    read_counter: &Arc<AtomicU64>,
+    #[cfg(feature = "stats")]
+    write_counter: &Arc<AtomicU64>
+  ) -> Result<Sender, ConnectError> {
     // http/1.0 uses one request per connection and does not take part in the pool
     // we only enable http/1.0 in the pool for convenience
     // we set a Weak that always returns None on upgrade
     if matches!(key.version, Version::Http10) {
-      let sender = Sender::connect(key.clone(), Weak::default()).await?;
+      let sender = Sender::connect(
+        key.clone(),
+        #[cfg(feature = "stats")]
+        read_counter,
+        #[cfg(feature = "stats")]
+        write_counter,
+        Weak::default()
+      ).await?;
       return Ok(sender);
     }
 
@@ -570,7 +540,14 @@ impl Pool {
     };
 
     let weak = Arc::downgrade(&self.map);
-    let sender = Sender::connect(key.clone(), weak).await?;
+    let sender = Sender::connect(
+      key.clone(),
+      #[cfg(feature = "stats")]
+      read_counter,
+      #[cfg(feature = "stats")]
+      write_counter,
+      weak
+    ).await?;
 
     Ok(sender)
   }
@@ -580,11 +557,16 @@ impl Pool {
    * This will try to reuse an open connection if possible. \
    * The used connection will be reinserted into the pool after use if applicable. \
    */
+  #[allow(clippy::too_many_arguments)]
   pub async fn send_request(
     &self,
     mut request: Request,
     sni: Option<Sni>,
     accept_invalid_certs: bool,
+    #[cfg(feature = "stats")]
+    read_counter: &Arc<AtomicU64>,
+    #[cfg(feature = "stats")]
+    write_counter: &Arc<AtomicU64>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
     proxy_protocol_config: Option<ProxyProtocolConfig>
@@ -645,8 +627,19 @@ impl Pool {
     // and never reinserted into the pool
     let pool = self.clone();
 
+    #[cfg(feature = "stats")]
+    let read_counter = read_counter.clone();
+    #[cfg(feature = "stats")]
+    let write_counter = write_counter.clone();
+    
     tokio::spawn(async move {
-      let sender = match pool.get(&key).await {
+      let sender = match pool.get(
+        &key,
+        #[cfg(feature = "stats")]
+        &read_counter,
+        #[cfg(feature = "stats")]
+        &write_counter
+      ).await {
         Ok(sender) => sender,
         Err(e) => return Err(ClientError::Connect { request, source: e }),
       };
@@ -1016,10 +1009,10 @@ impl ClientError {
 #[derive(Derivative, thiserror::Error)]
 #[derivative(Debug)]
 pub enum ConnectError {
-  #[error("https tcp ready error: {0}")]
-  HttpsTcpReady(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
-  #[error("https tcp connect error: {0}")]
-  HttpsTcpConnect(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
+  // #[error("https tcp ready error: {0}")]
+  // HttpsTcpReady(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
+  // #[error("https tcp connect error: {0}")]
+  // HttpsTcpConnect(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
   #[error("tcp connect error: {0}")]
   TcpConnect(#[source] std::io::Error),
   #[error("tcp handshake error: {0}")]
@@ -1059,10 +1052,15 @@ static GLOBAL_POOL: Lazy<Pool> = Lazy::new(Pool::new);
  * On first usage, the global pool will be initialized.\
  * see [`Pool::send_request`] for more information.
  */
+#[allow(clippy::too_many_arguments)]
 pub async fn send_request(
   request: Request,
   sni: Option<Sni>,
   accept_invalid_certs: bool,
+  #[cfg(feature = "stats")]
+  read_counter: &Arc<AtomicU64>,
+  #[cfg(feature = "stats")]
+  write_counter: &Arc<AtomicU64>,
   read_timeout: Option<Duration>,
   write_timeout: Option<Duration>,
   proxy_protocol_config: Option<ProxyProtocolConfig>
@@ -1071,6 +1069,10 @@ pub async fn send_request(
     request,
     sni,
     accept_invalid_certs,
+    #[cfg(feature = "stats")]
+    read_counter,
+    #[cfg(feature = "stats")]
+    write_counter,
     read_timeout,
     write_timeout,
     proxy_protocol_config
@@ -1091,7 +1093,18 @@ pub fn log() {
  * It will not send a request or check that the upstreams returns a somewhat valid response.\
  */
 pub async fn healthcheck(key: Key) -> Result<(), ConnectError> {
-  let mut sender = Sender::connect(key, Weak::default()).await?;
+  #[cfg(feature = "stats")]
+  let read_counter = Arc::new(AtomicU64::new(0));
+  #[cfg(feature = "stats")]
+  let write_counter = Arc::new(AtomicU64::new(0));
+  let mut sender = Sender::connect(
+    key,
+    #[cfg(feature = "stats")]
+    &read_counter,
+    #[cfg(feature = "stats")]
+    &write_counter,
+    Weak::default()
+  ).await?;
   sender.ready().await?;
   Ok(())
 }

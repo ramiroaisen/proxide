@@ -15,6 +15,8 @@ pub mod proxy_protocol;
 pub mod serde;
 pub mod serve;
 pub mod service;
+#[cfg(feature = "stats")]
+pub mod stats;
 pub mod tls;
 pub mod upgrade;
 pub mod util;

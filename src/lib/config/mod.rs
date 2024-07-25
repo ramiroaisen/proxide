@@ -1,4 +1,6 @@
 use std::str::FromStr;
+#[cfg(feature = "stats")]
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -327,6 +329,18 @@ pub struct HttpUpstream {
   // u32 gives us 4 B per upstream, i think that's enough
   #[serde(skip, default)]
   pub state_open_connections: Arc<AtomicUsize>,
+
+  #[serde(skip, default)]
+  #[cfg(feature = "stats")]
+  pub stats_total_read_bytes: Arc<AtomicU64>,
+
+  #[serde(skip, default)]
+  #[cfg(feature = "stats")]
+  pub stats_total_write_bytes: Arc<AtomicU64>,
+
+  #[serde(skip, default)]
+  #[cfg(feature = "stats")]
+  pub stats_total_connections: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -342,6 +356,18 @@ pub struct StreamUpstream {
   pub proxy_protocol_write_timeout: Option<SDuration>,
   #[serde(skip, default)]
   pub state_open_connections: Arc<AtomicUsize>,
+
+  #[serde(skip, default)]
+  #[cfg(feature = "stats")]
+  pub stats_total_read_bytes: Arc<AtomicU64>,
+
+  #[serde(skip, default)]
+  #[cfg(feature = "stats")]
+  pub stats_total_write_bytes: Arc<AtomicU64>,
+
+  #[serde(skip, default)]
+  #[cfg(feature = "stats")]
+  pub stats_total_connections: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+  apps:
+    - listen:
+        - addr: 10200
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:10250
+
+    - listen:
+        - addr: 10201
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - base_url: https://127.0.0.1:10251
+            danger_accept_invalid_certs: true
+
+stream:
+  apps:
+    - listen:
+        - addr: 10202
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:10252
+
+    - listen:
+        - addr: 10203
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: ssl://127.0.0.1:10253
+            danger_accept_invalid_certs: true

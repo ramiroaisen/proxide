@@ -22,7 +22,9 @@ full = [
   "client-log",
   "interpolation",
   "compression-all-algos",
+  # "stats",
 ]
+stats = []
 human-panic = ["dep:human-panic"]
 proctitle = ["dep:proctitle"]
 compression-all-algos = [ "compression-br", "compression-zstd", "compression-gzip", "compression-deflate" ]
