@@ -49,6 +49,7 @@ use crate::proxy::header::{
   HTTP, HTTPS, SERVER_HEADER_VALUE, X_FORWARDED_FOR, X_FORWARDED_HOST, X_FORWARDED_PROTO, X_REAL_IP,
 };
 use crate::proxy_protocol::ProxyHeader;
+use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
@@ -111,6 +112,8 @@ pub fn resolve_upstream_app<'a>(
 ))]
 fn compress(
   app_compression: &[crate::config::Compress],
+  app_compression_content_types: &[ContentTypeMatcher],
+  app_compression_min_size: u64,
   accept_encoding: Option<&HeaderValue>,
   status: StatusCode,
   upstream_body: Body,
@@ -118,6 +121,8 @@ fn compress(
 ) -> (Body, hyper::HeaderMap) {
   if let Some(selected) = crate::compression::should_compress(
     app_compression,
+    app_compression_content_types,
+    app_compression_min_size,
     accept_encoding,
     status,
     upstream_body.size_hint(),
@@ -560,6 +565,42 @@ pub async fn serve_proxy(
           }};
         }
 
+        #[cfg(any(
+          feature = "compression-br",
+          feature = "compression-zstd",
+          feature = "compression-gzip",
+          feature = "compression-deflate"
+        ))]
+        macro_rules! compression_content_types {
+          () => {{
+            let content_types: &[_] = crate::option!(
+              upstream.compression_content_types.as_deref(),
+              app.compression_content_types.as_deref(),
+              config.http.compression_content_types.as_deref(),
+              => crate::config::defaults::DEFAULT_COMPRESSION_CONTENT_TYPES
+            );
+
+            content_types
+          }};
+        }
+
+        #[cfg(any(
+          feature = "compression-br",
+          feature = "compression-zstd",
+          feature = "compression-gzip",
+          feature = "compression-deflate"
+        ))]
+        macro_rules! compression_min_size {
+          () => {
+            crate::option!(
+              upstream.compression_min_size,
+              app.compression_min_size,
+              config.http.compression_min_size,
+              => crate::config::defaults::DEFAULT_COMPRESSION_MIN_SIZE
+            )
+          }
+        }
+
         let proxy_sni = upstream.sni.clone();
 
         let proxy_uri = {
@@ -768,6 +809,8 @@ pub async fn serve_proxy(
             ))]
             let (mut response_body, mut response_headers) = compress(
               compression!(),
+              compression_content_types!(),
+              compression_min_size!(),
               request_accept_encoding.as_ref(),
               upstream_status,
               upstream_body,
@@ -931,6 +974,8 @@ pub async fn serve_proxy(
           ))]
           let (mut response_body, mut response_headers) = compress(
             compression!(),
+            compression_content_types!(),
+            compression_min_size!(),
             request_accept_encoding.as_ref(),
             upstream_status,
             upstream_body,

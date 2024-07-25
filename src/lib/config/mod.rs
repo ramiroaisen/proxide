@@ -26,6 +26,7 @@ use crate::compression::Encoding;
 use crate::log::logfile::LogFileConfig;
 use crate::log::LevelFilter;
 use crate::proxy_protocol::ProxyProtocolVersion;
+use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
@@ -58,6 +59,57 @@ pub mod defaults {
 
   pub const DEFAULT_STREAM_PROXY_READ_TIMEOUT: Duration = Duration::from_secs(60 * 60);
   pub const DEFAULT_STREAM_PROXY_WRITE_TIMEOUT: Duration = Duration::from_secs(60 * 5);
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate",
+  ))]
+  pub const DEFAULT_COMPRESSION_MIN_SIZE: u64 = 128;
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  macro_rules! list {
+    ($($v:expr,)*) => {
+      &[
+        $(ContentTypeMatcher::from_static($v)),*
+      ]
+    };
+  }
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub const DEFAULT_COMPRESSION_CONTENT_TYPES: &[ContentTypeMatcher] = list!(
+    "text/*",
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "image/svg+xml",
+    "application/x-javascript",
+    "application/manifest+json",
+    "application/vnd.api+json",
+    "application/xhtml+xml",
+    "application/rss+xml",
+    "application/atom+xml",
+    "application/vnd.ms-fontobject",
+    "application/x-font-ttf",
+    "application/x-font-opentype",
+    "application/x-font-truetype",
+    "image/x-icon",
+    "image/vnd.microsoft.icon",
+    "font/ttf",
+    "font/otf",
+    "font/eot",
+    "font/opentype",
+  );
 
   #[cfg(any(
     feature = "compression-br",
@@ -186,6 +238,22 @@ pub struct Http {
   ))]
   pub compression: Option<Vec<Compress>>,
 
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub compression_content_types: Option<Vec<ContentTypeMatcher>>,
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub compression_min_size: Option<u64>,
+
   pub server_read_timeout: Option<SDuration>,
   pub server_write_timeout: Option<SDuration>,
   pub proxy_read_timeout: Option<SDuration>,
@@ -245,6 +313,22 @@ pub struct HttpApp {
     feature = "compression-deflate"
   ))]
   pub compression: Option<Vec<Compress>>,
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub compression_content_types: Option<Vec<ContentTypeMatcher>>,
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub compression_min_size: Option<u64>,
 
   pub proxy_read_timeout: Option<SDuration>,
   pub proxy_write_timeout: Option<SDuration>,
@@ -316,6 +400,22 @@ pub struct HttpUpstream {
     feature = "compression-deflate"
   ))]
   pub compression: Option<Vec<Compress>>,
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub compression_content_types: Option<Vec<ContentTypeMatcher>>,
+
+  #[cfg(any(
+    feature = "compression-br",
+    feature = "compression-zstd",
+    feature = "compression-gzip",
+    feature = "compression-deflate"
+  ))]
+  pub compression_min_size: Option<u64>,
 
   pub proxy_protocol_write_timeout: Option<SDuration>,
 
