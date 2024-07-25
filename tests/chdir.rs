@@ -31,21 +31,27 @@ fn chdir() {
 
   thread::sleep(Duration::from_millis(100));
 
-  let signal_args = proxide::cli::args::Args::try_parse_from([
-    "proxide",
-    "signal",
-    "--chdir",
-    &dir,
-    "--config",
-    "config.yml",
-    "--signal",
-    "reload",
-  ])
-  .unwrap();
+  #[cfg(unix)]
+  {
+    let signal_args = proxide::cli::args::Args::try_parse_from([
+      "proxide",
+      "signal",
+      "--chdir",
+      &dir,
+      "--config",
+      "config.yml",
+      "--signal",
+      "reload",
+    ])
+    .unwrap();
 
-  proxide::cli::run(signal_args).unwrap();
+    proxide::cli::run(signal_args).unwrap();
 
-  std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+  }
+
+  #[cfg(windows)]
+  std::mem::forget(dir);
 
   block_on(async move {
     let res = get("http://127.0.0.1:10100").await.unwrap();
