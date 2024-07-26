@@ -26,6 +26,8 @@ fn tls_version() {
               .await
               .unwrap();
 
+            dbg!(listener.local_addr().unwrap());
+
             let server_version = match server_version {
               2 => &rustls::version::TLS12,
               3 => &rustls::version::TLS13,
