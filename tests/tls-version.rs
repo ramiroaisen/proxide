@@ -43,11 +43,11 @@ fn tls_version() {
                 )
                 .unwrap();
 
-            config.alpn_protocols = vec![match http_version {
-              1 => b"http/1.1".to_vec(),
-              2 => b"h2".to_vec(),
+            match http_version {
+              1 => config.alpn_protocols.push(b"http/1.1".to_vec()),
+              2 => config.alpn_protocols.push(b"h2".to_vec()),
               _ => unreachable!(),
-            }];
+            };
 
             let acceptor = TlsAcceptor::from(Arc::new(config));
 
@@ -109,11 +109,11 @@ fn tls_version() {
                   .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
                   .with_no_client_auth();
 
-              config.alpn_protocols = vec![match http_version {
-                1 => b"http/1.1".to_vec(),
-                2 => b"h2".to_vec(),
+              match http_version {
+                1 => config.alpn_protocols.push(b"http/1.1".to_vec()),
+                2 => config.alpn_protocols.push(b"h2".to_vec()),
                 _ => unreachable!(),
-              }];
+              };
 
               let connector = TlsConnector::from(Arc::new(config));
 
