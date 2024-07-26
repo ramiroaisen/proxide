@@ -6,10 +6,11 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::io;
 use std::{fs, path::Path};
 
-#[cfg(not(feature = "ring"))]
-pub use rustls::crypto::aws_lc_rs as crypto;
+// TODO: add aws_lc_rs support
+// #[cfg(not(feature = "ring"))]
+// pub use rustls::crypto::aws_lc_rs as crypto;
 
-#[cfg(feature = "ring")]
+// #[cfg(feature = "ring")]
 pub use rustls::crypto::ring as crypto;
 
 // #[cfg(all(feature = "ring", feature = "aws_lc_rs"))]

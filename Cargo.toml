@@ -16,7 +16,7 @@ path = "src/bin/proxide.rs"
 default = ["full"]
 full = [
   # "proctitle",
-  "aws_lc_rs",
+  # "aws_lc_rs",
   "log-info",
   "jemalloc",
   "primary-log",
@@ -47,11 +47,12 @@ log-error = ["log/release_max_level_error"]
 log-warn = ["log/release_max_level_warn"]
 log-info = ["log/release_max_level_info"]
 log-debug = ["log/release_max_level_debug"]
-ring = [ "rustls/ring" ]
-aws_lc_rs = [ "rustls/aws_lc_rs" ]
+# add aws_lc_rs support for windows
+# ring = [ "rustls/ring" ]
+# aws_lc_rs = [ "rustls/aws_lc_rs" ]
 
 [dependencies]
-rustls = { version = "0.23.12", default-features = false, features = [ "std",  "aws_lc_rs", "tls12", "brotli", "zlib" ] }   
+rustls = { version = "0.23.12", default-features = false, features = [ "std", "tls12", "brotli", "zlib", "ring" ] }   
 # we only need hyper-rustls for the .with_native_roots() extension method on the rustls Config builder
 hyper-rustls = { version = "0.27.1", default-features = false, features = [ "rustls-native-certs" ] }
 tokio-rustls = { version = "0.26.0", default-features = false, features = [] }
@@ -127,9 +128,9 @@ tikv-jemallocator = { version = "0.5.4", optional = true, features = ["profiling
 
 [package.metadata.cargo-all-features]
 # Exclude certain features from the build-all-features matrix
-skip_feature_sets = [
-  ["aws_lc_rs", "ring"],
-]
+# skip_feature_sets = [
+#   ["aws_lc_rs", "ring"],
+# ]
 
 denylist = [
   "log-off",
