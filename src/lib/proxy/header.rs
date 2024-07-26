@@ -8,10 +8,10 @@ use hyper::{
 use crate::util::trim;
 
 pub const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
-pub const X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
 pub const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 pub const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 pub const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
+pub const X_FORWARDED_PORT: HeaderName = HeaderName::from_static("x-forwarded-port");
 
 pub const SERVER_HEADER_VALUE: HeaderValue = HeaderValue::from_static("proxide");
 pub const CONNECTION_UPGRADE: HeaderValue = HeaderValue::from_static("upgrade");

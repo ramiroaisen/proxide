@@ -860,6 +860,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           match handle {
             HttpHandle::Return { .. } => {}
             HttpHandle::HeapProfile { .. } => {}
+            HttpHandle::Stats { .. } => {}
             HttpHandle::Proxy {
               upstream,
               balance: _,
@@ -868,6 +869,10 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
               proxy_headers: _,
               response_headers: _,
               proxy_protocol_write_timeout: _,
+              proxy_read_timeout: _,
+              proxy_write_timeout: _,
+              proxy_tcp_nodelay: _,
+              state_round_robin_index: _,
             } => {
               for up in upstream {
                 use itertools::Itertools;
@@ -903,6 +908,10 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
             retries: _,
             retry_backoff: _,
             proxy_protocol_write_timeout: _,
+            proxy_read_timeout: _,
+            proxy_write_timeout: _,
+            proxy_tcp_nodelay: _,
+            state_round_robin_index: _,
           } => {
             for up in upstream {
               log::info!(

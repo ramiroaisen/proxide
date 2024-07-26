@@ -1,17 +1,11 @@
 #![allow(clippy::declare_interior_mutable_const)] // silence const headers warning
 #![allow(non_camel_case_types)] // silence #[dynamic] warning
 #![allow(non_upper_case_globals)]
-use http::header::CONTENT_TYPE;
 // silence #[dynamic] warning
 use http::Uri;
 use hyper::body::Body as HyperBody;
-use hyper::header::{HeaderValue, CONNECTION, HOST};
-use hyper::{
-  body::Incoming,
-  header::{HeaderName, SERVER},
-  service::Service,
-  Request, Response,
-};
+use hyper::header::{HeaderName, HeaderValue, CONNECTION, CONTENT_TYPE, HOST, SERVER};
+use hyper::{body::Incoming, service::Service, Request, Response};
 use hyper::{Method, StatusCode};
 use hyper_rustls::ConfigBuilderExt;
 use hyper_util::rt::TokioIo;
@@ -50,10 +44,10 @@ use crate::config::{Balance, Config, HttpApp, HttpHandle, HttpUpstream, StreamHa
 use crate::net::timeout::TimeoutIo;
 use crate::proxy::balance::balance_sort;
 use crate::proxy::error::ProxyHttpError;
-use crate::proxy::header::{
-  HTTP, HTTPS, SERVER_HEADER_VALUE, X_FORWARDED_FOR, X_FORWARDED_HOST, X_FORWARDED_PROTO, X_REAL_IP,
-};
+use crate::proxy::header::SERVER_HEADER_VALUE;
 use crate::proxy_protocol::ProxyHeader;
+#[allow(unused)]
+use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
@@ -62,9 +56,6 @@ use crate::service::{AddrService, Connection, StreamService};
 use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 use crate::upgrade::{request_connection_upgrade, response_connection_upgrade};
-
-#[allow(unused)]
-use crate::serde::content_type::ContentTypeMatcher;
 
 #[inline(always)]
 #[must_use = "increment_open_connections returns a drop guard"]
@@ -164,8 +155,6 @@ pub async fn serve_proxy(
   #[cfg(feature = "access-log")]
   let start = std::time::Instant::now();
 
-  let proxy_header_addr = proxy_header.as_ref().and_then(|h| h.source_addr());
-
   let request_uri = request.uri().clone();
   let request_method = request.method().clone();
   let request_version = request.version();
@@ -176,6 +165,33 @@ pub async fn serve_proxy(
   let request_referer = request.headers().get(hyper::header::REFERER).cloned();
   #[cfg(feature = "access-log")]
   let request_user_agent = request.headers().get(hyper::header::USER_AGENT).cloned();
+
+  #[cfg(feature = "interpolation")]
+  let request_forwarded = request.headers().get(hyper::header::FORWARDED).cloned();
+
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_for = request
+    .headers()
+    .get(crate::proxy::header::X_FORWARDED_FOR)
+    .cloned();
+
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_host = request
+    .headers()
+    .get(crate::proxy::header::X_FORWARDED_HOST)
+    .cloned();
+
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_proto = request
+    .headers()
+    .get(crate::proxy::header::X_FORWARDED_PROTO)
+    .cloned();
+
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_port = request
+    .headers()
+    .get(crate::proxy::header::X_FORWARDED_PORT)
+    .cloned();
 
   let (host, port) = resolve_host_port(&request)?;
   let host = host.to_string();
@@ -214,6 +230,256 @@ pub async fn serve_proxy(
     let handle_proxy_tcp_nodelay: Option<bool>;
     let upstreams: &[HttpUpstream];
 
+    #[cfg(feature = "interpolation")]
+    macro_rules! var {
+      ($f:ident, scheme) => {{
+        $f.push_str(if is_ssl { "https" } else { "http" })
+      }};
+
+      ($f:ident, proto) => {{
+        $f.push_str(if is_ssl { "https" } else { "http" })
+      }};
+
+      ($f:ident, host) => {{
+        $f.push_str(&host);
+      }};
+
+      ($f:ident, port) => {{
+        if let Some(port) = port {
+          let _ = write!($f, ":{}", port);
+        }
+      }};
+
+      ($f:ident, method) => {{
+        $f.push_str(request_method.as_str())
+      }};
+
+      ($f:ident, version) => {{
+        $f.push_str(match request_version {
+          hyper::Version::HTTP_09 => "0.9",
+          hyper::Version::HTTP_10 => "1.0",
+          hyper::Version::HTTP_11 => "1.1",
+          hyper::Version::HTTP_2 => "2.0",
+          hyper::Version::HTTP_3 => "3.0",
+          _ => "unknown",
+        })
+      }};
+
+      ($f:ident, request_uri) => {{
+        match request_uri.path_and_query() {
+          Some(uri) => $f.push_str(uri.as_str()),
+          None => $f.push_str("/"),
+        }
+      }};
+
+      ($f:ident, connection_remote_ip) => {{
+        let _ = write!($f, "{}", remote_addr.ip());
+      }};
+
+      ($f:ident, proxy_protocol_remote_ip) => {{
+        match &proxy_header {
+          Some(header) => match header.source_addr() {
+            Some(addr) => {
+              let _ = write!($f, "{}", addr.ip());
+            }
+            None => {
+              $f.push_str("unknown");
+            }
+          },
+
+          None => {
+            $f.push_str("unknown");
+          }
+        }
+      }};
+
+      ($f:ident, remote_ip) => {{
+        match &proxy_header {
+          Some(header) => match header.source_addr() {
+            Some(addr) => {
+              let _ = write!($f, "{}", addr.ip());
+            }
+            None => {
+              let _ = write!($f, "{}", remote_addr.ip());
+            }
+          },
+
+          None => {
+            let _ = write!($f, "{}", remote_addr.ip());
+          }
+        }
+      }};
+
+      ($f:ident, forwarded) => {{
+        // for(self)
+        if remote_addr.is_ipv4() {
+          let _ = write!($f, "for={}", remote_addr);
+        } else {
+          let _ = write!($f, "for=\"[{}]:{}\"", remote_addr.ip(), remote_addr.port());
+        }
+
+        // by(self)
+        if local_addr.is_ipv4() {
+          let _ = write!($f, ";by={}", local_addr);
+        } else {
+          let _ = write!($f, ";by=\"[{}]:{}\"", local_addr.ip(), local_addr.port());
+        }
+
+        // proto(self)
+        let _ = write!($f, ";proto={}", if is_ssl { "https" } else { "http" });
+
+        // host(self)
+        let _ = write!($f, ";host={}", host);
+
+        // by(proxy_protocol)
+        if let Some(header) = &proxy_header {
+          match (header.destination_addr(), header.source_addr()) {
+            (Some(addr), source_addr) => {
+              if addr.is_ipv4() {
+                let _ = write!($f, ",for={}", addr);
+              } else {
+                let _ = write!($f, ",for=\"[{}]:{}\"", addr.ip(), addr.port());
+              }
+
+              if let Some(source_addr) = source_addr {
+                if source_addr.is_ipv4() {
+                  let _ = write!($f, ";by={}", source_addr);
+                } else {
+                  let _ = write!($f, ";by=\"[{}]:{}\"", source_addr.ip(), source_addr.port());
+                }
+              }
+            }
+            (None, Some(source_addr)) => {
+              if source_addr.is_ipv4() {
+                let _ = write!($f, ";by={}", source_addr);
+              } else {
+                let _ = write!($f, ";by=\"[{}]:{}\"", source_addr.ip(), source_addr.port());
+              }
+            }
+            (None, None) => {}
+          }
+
+          // headers
+          if let Some(prev) = &request_forwarded {
+            if let Ok(prev) = prev.to_str() {
+              $f.push(',');
+              $f.push_str(prev);
+            }
+          }
+        }
+      }};
+
+      ($f:ident, x_forwarded_for) => {{
+        // we do not include the port here as some server implementations
+        // are not able to handle this header correctly when it includes a port
+        // the above, x-forwarded-port
+        // Eg: 255.1.5.9
+        // Eg: 255.1.5.9,::ffff:ffff
+
+        // self
+        let _ = write!($f, "{}", remote_addr.ip());
+        if let Some(proxy_header) = &proxy_header {
+          if let Some(addr) = proxy_header.source_addr() {
+            let _ = write!($f, ",{}", addr.ip());
+          }
+        }
+
+        // follow
+        match &request_x_forwarded_for {
+          Some(header) => match header.to_str() {
+            Ok(header) => {
+              let _ = write!($f, ",{}", header);
+            }
+            _ => {}
+          },
+          _ => {}
+        }
+      }};
+
+      ($f:ident, x_forwarded_port) => {{
+        // Eg: 80
+        // Eg: 80,443
+
+        // self
+        let _ = write!($f, "{}", remote_addr.port());
+
+        // proxy protocol
+        if let Some(proxy_header) = &proxy_header {
+          if let Some(addr) = proxy_header.source_addr() {
+            let _ = write!($f, ",{}", addr.port());
+          }
+        }
+
+        // header
+        match &request_x_forwarded_port {
+          Some(header) => match header.to_str() {
+            Ok(header) => {
+              let _ = write!($f, ",{}", header);
+            }
+            _ => {}
+          },
+          _ => {}
+        }
+      }};
+
+      ($f:ident, x_forwarded_host) => {{
+        // Eg: foo.com
+        // Eg: foo.com,bar.com
+
+        // self
+        let _ = $f.write_str(&host);
+
+        // header
+        match &request_x_forwarded_host {
+          Some(header) => match header.to_str() {
+            Ok(header) => {
+              let _ = write!($f, ",{}", header);
+            }
+            _ => {}
+          },
+          _ => {}
+        }
+      }};
+
+      ($f:ident, x_forwarded_proto) => {{
+        // Eg: https
+        // Eg: https,http
+
+        // self
+        $f.push_str(if is_ssl { "https" } else { "http" });
+
+        // header
+        match &request_x_forwarded_proto {
+          Some(header) => match header.to_str() {
+            Ok(header) => {
+              let _ = write!($f, ",{}", header);
+            }
+            _ => {}
+          },
+          _ => {}
+        }
+      }};
+
+      ($f:ident, via) => {{
+        // Eg: HTTP/1.1 example.com
+        // Eg: HTTP/2.0 example.com:8000
+
+        $f.push_str(match request_version {
+          hyper::Version::HTTP_09 => "HTTP/0.9",
+          hyper::Version::HTTP_10 => "HTTP/1.0",
+          hyper::Version::HTTP_11 => "HTTP/1.1",
+          hyper::Version::HTTP_2 => "HTTP/2.0",
+          hyper::Version::HTTP_3 => "HTTP/3.0",
+          _ => "unknown",
+        });
+
+        $f.push(' ');
+
+        var!($f, host);
+        var!($f, port);
+      }};
+    }
+
     // TODO: document this and move out of the service function
     #[cfg(feature = "interpolation")]
     macro_rules! interpolate {
@@ -222,72 +488,42 @@ pub async fn serve_proxy(
 
         use std::fmt::Write;
         use $crate::interpolate::{tokens, Token as T};
-        let mut target = String::with_capacity(src.len());
+        let mut f = String::with_capacity(src.len());
 
         for token in tokens(src) {
           match token {
             T::Lit(v) => {
-              target.push_str(v);
+              f.push_str(v);
             }
 
-            T::Var(ident) => {
-              match ident {
-                "scheme" => target.push_str(if is_ssl { "https" } else { "http" }),
-                "host" => target.push_str(&host),
-                "port" => if let Some(port) = port { let _ = write!(target, ":{}", port); },
-                "method" => target.push_str(request_method.as_str()),
-                "version" => target.push_str(match request_version {
-                  hyper::Version::HTTP_09 => "0.9",
-                  hyper::Version::HTTP_10 => "1.0",
-                  hyper::Version::HTTP_11 => "1.1",
-                  hyper::Version::HTTP_2 => "2.0",
-                  hyper::Version::HTTP_3 => "3.0",
-                  _ => "unknown",
-                }),
-                "request_uri" => {
-                  match request_uri.path_and_query() {
-                    Some(uri) => target.push_str(uri.as_str()),
-                    None => target.push_str("/"),
-                  }
-                }
-
-                "connection_remote_ip" => {
-                  let _ = write!(target, "{}", remote_addr.ip());
-                },
-
-                "proxy_protocol_remote_ip" => {
-                  match proxy_header_addr {
-                    None => {
-                      target.push_str("unknown");
-                    }
-
-                    Some(addr) => {
-                      let _ = write!(target, "{}", addr.ip());
-                    }
-                  }
-                },
-
-                "remote_ip" => {
-                  match proxy_header_addr {
-                    None => {
-                      let _ = write!(target, "{}", remote_addr.ip());
-                    }
-                    Some(addr) => {
-                      let _ = write!(target, "{}", addr.ip());
-                    }
-                  }
-                },
-                _ => {
-                  target.push('$');
-                  target.push_str(ident);
-                }
+            T::Var(ident) => match ident {
+              "scheme" => var!(f, scheme),
+              "proto" => var!(f, proto),
+              "host" => var!(f, host),
+              "port" => var!(f, port),
+              "method" => var!(f, method),
+              "version" => var!(f, version),
+              "request_uri" => var!(f, request_uri),
+              "connection_remote_ip" => var!(f, connection_remote_ip),
+              "proxy_protocol_remote_ip" => var!(f, proxy_protocol_remote_ip),
+              "remote_ip" => var!(f, remote_ip),
+              "forwarded" => var!(f, forwarded),
+              "x_forwarded_for" => var!(f, x_forwarded_for),
+              "x_forwarded_port" => var!(f, x_forwarded_port),
+              "x_forwarded_host" => var!(f, x_forwarded_host),
+              "x_forwarded_proto" => var!(f, x_forwarded_proto),
+              "via" => var!(f, via),
+              _ => {
+                f.push_str("${");
+                f.push_str(ident);
+                f.push('}');
               }
-            }
+            },
           }
         }
 
-        target
-      }}
+        f
+      }};
     }
 
     #[cfg(feature = "interpolation")]
@@ -379,6 +615,7 @@ pub async fn serve_proxy(
         HttpHandle::HeapProfile { response_headers } => {
           #[cfg(not(all(target_os = "linux", feature = "jemalloc")))]
           {
+            let _ = response_headers;
             return Err(ProxyHttpError::HeapProfileNotCompiled);
           }
 
@@ -473,49 +710,10 @@ pub async fn serve_proxy(
       HeaderValue::try_from(host_string).map_err(|_| ProxyHttpError::InvalidHost)?
     };
 
-    let proxy_x_real_ip = match proxy_header_addr {
-      None => HeaderValue::try_from(remote_addr.ip().to_string()).unwrap(),
-      Some(addr) => HeaderValue::try_from(addr.ip().to_string()).unwrap(),
-    };
-
-    let proxy_x_forwarded_for = match proxy_header_addr {
-      Some(proxy_protocol_addr) => match request.headers().get(X_FORWARDED_FOR) {
-        Some(prev) => match prev.to_str() {
-          Ok(prev) => HeaderValue::try_from(format!(
-            "{},{},{}",
-            prev,
-            proxy_protocol_addr.ip(),
-            remote_addr.ip()
-          ))
-          .unwrap(),
-          Err(_) => {
-            HeaderValue::try_from(format!("{},{}", proxy_protocol_addr.ip(), remote_addr.ip()))
-              .unwrap()
-          }
-        },
-
-        None => HeaderValue::try_from(format!("{},{}", proxy_protocol_addr.ip(), remote_addr.ip()))
-          .unwrap(),
-      },
-
-      None => match request.headers().get(X_FORWARDED_FOR) {
-        Some(prev) => match prev.to_str() {
-          Ok(prev) => HeaderValue::try_from(format!("{},{}", prev, remote_addr.ip())).unwrap(),
-          Err(_) => proxy_x_real_ip.clone(),
-        },
-
-        None => proxy_x_real_ip.clone(),
-      },
-    };
-
     let proxy_method = request_method.clone();
     let mut proxy_headers = request.headers().clone();
     remove_hop_headers(&mut proxy_headers);
     proxy_headers.insert(HOST, proxy_host.clone());
-    proxy_headers.insert(X_REAL_IP, proxy_x_real_ip);
-    proxy_headers.insert(X_FORWARDED_HOST, proxy_host);
-    proxy_headers.insert(X_FORWARDED_FOR, proxy_x_forwarded_for);
-    proxy_headers.insert(X_FORWARDED_PROTO, if is_ssl { HTTPS } else { HTTP });
     add_headers!(proxy_headers, config.http.proxy_headers);
     add_headers!(proxy_headers, handle_proxy_headers);
     // the $config.http.app.upstream proxy headers will be added on demand for the selected upstream
@@ -1122,6 +1320,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
     handle_proxy_read_timeout,
     handle_proxy_write_timeout,
     handle_proxy_tcp_nodelay,
+    round_robin_index,
   ) = match &app.handle {
     StreamHandle::Proxy {
       balance,
@@ -1132,6 +1331,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       proxy_read_timeout,
       proxy_write_timeout,
       proxy_tcp_nodelay,
+      state_round_robin_index,
     } => (
       upstream,
       *balance,
@@ -1141,6 +1341,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       *proxy_read_timeout,
       *proxy_write_timeout,
       *proxy_tcp_nodelay,
+      state_round_robin_index,
     ),
   };
 
@@ -1186,12 +1387,8 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       tokio::time::sleep(backoff.duration_for(i - 1)).await;
     }
 
-    let sorted_upstreams = crate::proxy::balance::balance_sort(
-      upstreams,
-      balance,
-      remote_addr.ip(),
-      &app.state_round_robin_index,
-    );
+    let sorted_upstreams =
+      crate::proxy::balance::balance_sort(upstreams, balance, remote_addr.ip(), round_robin_index);
 
     'upstreams: for upstream in sorted_upstreams {
       match upstream.origin.scheme() {
