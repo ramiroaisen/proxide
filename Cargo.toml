@@ -22,7 +22,7 @@ full = [
   "client-log",
   "interpolation",
   "compression-all-algos",
-  "stats",
+  # "stats",
 ]
 stats = []
 human-panic = ["dep:human-panic"]
@@ -38,7 +38,6 @@ access-log = []
 client-log = []
 primary-log = []
 server-tcp-nodelay = []
-proxy-tcp-nodelay = []
 tracing = ["tokio/tracing", "dep:console-subscriber"]
 log-state = []
 log-off = ["log/max_level_off"]

@@ -52,6 +52,18 @@ pub enum ProxyHttpError {
     upstream: hyper::Error,
   },
 
+  #[error("error serializing stats: {0}")]
+  StatsSerialize(#[source] serde_json::Error),
+
+  #[error("heap profiling was not compiled")]
+  HeapProfileNotCompiled,
+
+  #[error("heap profiling was not activated at compile time")]
+  HeapProfileNotActivated,
+
+  #[error("error dumping heap profile: {0}")]
+  HeapProfileError(#[source] anyhow::Error),
+
   #[error("client error: {message}")]
   Client {
     kind: ClientErrorKind,
@@ -86,6 +98,10 @@ impl ProxyHttpError {
       E::UpgradeIoBoth { .. } => ErrorOriginator::Io,
       E::UpgradeIoClient(_) => ErrorOriginator::Io,
       E::UpgradeIoUpstream(_) => ErrorOriginator::Upstream,
+      E::StatsSerialize(_) => ErrorOriginator::Internal,
+      E::HeapProfileNotCompiled => ErrorOriginator::Internal,
+      E::HeapProfileNotActivated => ErrorOriginator::Internal,
+      E::HeapProfileError(_) => ErrorOriginator::Internal,
       E::Client { kind, .. } => kind.originator(),
     }
   }
@@ -104,6 +120,10 @@ impl ProxyHttpError {
       E::InvalidUpstreamUrlMissingHost => StatusCode::INTERNAL_SERVER_ERROR,
       E::IncomingBody(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::CompressBodyChunk(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      E::StatsSerialize(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      E::HeapProfileNotCompiled => StatusCode::SERVICE_UNAVAILABLE,
+      E::HeapProfileNotActivated => StatusCode::SERVICE_UNAVAILABLE,
+      E::HeapProfileError(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::UpgradeIoBoth { .. } => StatusCode::BAD_REQUEST,
       E::UpgradeIoClient(_) => StatusCode::BAD_REQUEST,
       E::UpgradeIoUpstream(_) => StatusCode::BAD_GATEWAY,
@@ -149,6 +169,9 @@ pub enum ProxyStreamError {
 
   #[error("proxy protocol write error: {0}")]
   ProxyProtocolWrite(std::io::Error),
+
+  #[error("set tcp nodelay error: {0}")]
+  SetTcpNoDelay(std::io::Error),
 
   #[error("tcp connect error: {0}")]
   TcpConnect(std::io::Error),

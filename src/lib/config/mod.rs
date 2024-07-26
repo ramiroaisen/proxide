@@ -41,6 +41,10 @@ pub mod matcher;
 pub mod regex;
 pub mod server_name;
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+  value == &T::default()
+}
+
 fn arc_atomic_bool<const B: bool>() -> Arc<AtomicBool> {
   Arc::new(AtomicBool::new(B))
 }
@@ -166,65 +170,93 @@ pub mod defaults {
 
   pub const DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT: Duration = Duration::from_secs(60);
   pub const DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+
+  pub const DEFAULT_PROXY_TCP_NODELAY: bool = false;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub pidfile: Option<String>,
 
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub log_level: Option<LevelFilter>,
 
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub primary_log: Option<LogFileConfig>,
 
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub access_log: Option<LogFileConfig>,
 
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub client_log: Option<LogFileConfig>,
 
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub graceful_shutdown_timeout: Option<SDuration>,
 
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_read_timeout: Option<SDuration>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_write_timeout: Option<SDuration>,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
+
+  #[serde(default, skip_serializing_if = "is_default")]
   pub rlimit: RLimit,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Http::is_empty")]
   pub http: Http,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Stream::is_empty")]
   pub stream: Stream,
 }
 
 // this struct is reused in the args and config structs
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, Parser)]
+#[derive(
+  Debug, Clone, Copy, Default, Serialize, Eq, PartialEq, Deserialize, JsonSchema, Parser,
+)]
 #[serde(deny_unknown_fields)]
 pub struct RLimit {
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-nofile", env = "PROXIDE_RLIMIT_NOFILE")]
   pub nofile: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-nproc", env = "PROXIDE_RLIMIT_NPROC")]
   pub nproc: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-threads", env = "PROXIDE_RLIMIT_THREADS")]
   pub rthreads: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-nthr", env = "PROXIDE_RLIMIT_NTHR")]
   pub nthr: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-stack", env = "PROXIDE_RLIMIT_STACK")]
   pub stack: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-rss", env = "PROXIDE_RLIMIT_RSS")]
   pub rss: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-memlock", env = "PROXIDE_RLIMIT_MEMLOCK")]
   pub memlock: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-swap", env = "PROXIDE_RLIMIT_SWAP")]
   pub swap: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-cpu", env = "PROXIDE_RLIMIT_CPU")]
   pub cpu: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-as", env = "PROXIDE_RLIMIT_AS")]
   #[serde(rename = "as")]
   pub r#as: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-core", env = "PROXIDE_RLIMIT_CORE")]
   pub core: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-data", env = "PROXIDE_RLIMIT_DATA")]
   pub data: Option<u64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   #[clap(long = "rlimit-fsize", env = "PROXIDE_RLIMIT_FSIZE")]
   pub fsize: Option<u64>,
 }
@@ -238,6 +270,7 @@ pub struct Http {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression: Option<Vec<Compress>>,
 
   #[cfg(any(
@@ -246,6 +279,7 @@ pub struct Http {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression_content_types: Option<Vec<ContentTypeMatcher>>,
 
   #[cfg(any(
@@ -254,59 +288,137 @@ pub struct Http {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression_min_size: Option<u64>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_write_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub graceful_shutdown_timeout: Option<SDuration>,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retries: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retry_backoff: Option<BackOff>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_write_timeout: Option<SDuration>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub balance: Option<Balance>,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub apps: Vec<HttpApp>,
+}
+
+impl Http {
+  fn is_empty(&self) -> bool {
+    match self {
+      Http {
+        balance: None,
+        retries: None,
+        retry_backoff: None,
+        proxy_protocol_write_timeout: None,
+        graceful_shutdown_timeout: None,
+        compression: None,
+        compression_content_types: None,
+        compression_min_size: None,
+        server_read_timeout: None,
+        server_write_timeout: None,
+        proxy_read_timeout: None,
+        proxy_write_timeout: None,
+        proxy_protocol_read_timeout: None,
+        proxy_tcp_nodelay: None,
+        apps,
+        response_headers,
+        proxy_headers,
+      } => apps.is_empty() && response_headers.is_empty() && proxy_headers.is_empty(),
+
+      _ => false,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Stream {
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_write_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_write_timeout: Option<SDuration>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub graceful_shutdown_timeout: Option<SDuration>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retries: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retry_backoff: Option<BackOff>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub balance: Option<Balance>,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub apps: Vec<StreamApp>,
+}
+
+impl Stream {
+  fn is_empty(&self) -> bool {
+    match self {
+      Stream {
+        balance: None,
+        retries: None,
+        retry_backoff: None,
+        proxy_protocol_write_timeout: None,
+        graceful_shutdown_timeout: None,
+        server_read_timeout: None,
+        server_write_timeout: None,
+        proxy_read_timeout: None,
+        proxy_write_timeout: None,
+        proxy_protocol_read_timeout: None,
+        proxy_tcp_nodelay: None,
+        apps,
+      } => apps.is_empty(),
+
+      _ => false,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HttpApp {
-  #[serde(deserialize_with = "listen::deserialize_listen_vec")]
   pub listen: Vec<Listen>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_names: Option<Vec<ServerName>>,
   #[cfg(any(
     feature = "compression-br",
@@ -314,6 +426,7 @@ pub struct HttpApp {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression: Option<Vec<Compress>>,
 
   #[cfg(any(
@@ -322,6 +435,7 @@ pub struct HttpApp {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression_content_types: Option<Vec<ContentTypeMatcher>>,
 
   #[cfg(any(
@@ -330,16 +444,19 @@ pub struct HttpApp {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression_min_size: Option<u64>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
 
-  #[serde(default)]
-  pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
 
-  #[serde(skip, default)]
-  pub state_round_robin_index: Arc<AtomicUsize>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
 
   #[serde(flatten)]
   pub handle: HttpHandle,
@@ -348,23 +465,31 @@ pub struct HttpApp {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamApp {
-  #[serde(deserialize_with = "listen::deserialize_listen_vec")]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub listen: Vec<Listen>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_write_timeout: Option<SDuration>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
 
-  #[serde(skip, default)]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
+
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   pub state_round_robin_index: Arc<AtomicUsize>,
 
   #[serde(flatten)]
   pub handle: StreamHandle,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub enum Balance {
   #[serde(rename = "round-robin")]
@@ -381,18 +506,25 @@ pub enum Balance {
 #[serde(deny_unknown_fields)]
 pub struct HttpUpstream {
   pub base_url: HttpUpstreamBaseUrl,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub sni: Option<Sni>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub send_proxy_protocol: Option<ProxyProtocolVersion>,
 
   #[serde(default)]
   pub version: UpstreamVersion,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
 
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
+
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
-  #[serde(default)]
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
 
   #[cfg(any(
@@ -401,6 +533,7 @@ pub struct HttpUpstream {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression: Option<Vec<Compress>>,
 
   #[cfg(any(
@@ -409,6 +542,7 @@ pub struct HttpUpstream {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression_content_types: Option<Vec<ContentTypeMatcher>>,
 
   #[cfg(any(
@@ -417,30 +551,37 @@ pub struct HttpUpstream {
     feature = "compression-gzip",
     feature = "compression-deflate"
   ))]
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub compression_min_size: Option<u64>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_write_timeout: Option<SDuration>,
 
   #[serde(default)]
   pub danger_accept_invalid_certs: bool,
 
   // should we send requests to this upstream or not
-  #[serde(skip, default = "arc_atomic_bool::<true>")]
+  #[serde(skip_deserializing, default = "arc_atomic_bool::<true>")]
+  #[schemars(skip)]
   pub state_health: Arc<AtomicBool>,
 
   // u32 gives us 4 B per upstream, i think that's enough
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   pub state_open_connections: Arc<AtomicUsize>,
 
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   #[cfg(feature = "stats")]
   pub stats_total_read_bytes: Arc<AtomicU64>,
 
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   #[cfg(feature = "stats")]
   pub stats_total_write_bytes: Arc<AtomicU64>,
 
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   #[cfg(feature = "stats")]
   pub stats_total_connections: Arc<AtomicU64>,
 }
@@ -449,25 +590,42 @@ pub struct HttpUpstream {
 #[serde(deny_unknown_fields)]
 pub struct StreamUpstream {
   pub origin: StreamUpstreamOrigin,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub sni: Option<Sni>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub send_proxy_protocol: Option<ProxyProtocolVersion>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_protocol_write_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_tcp_nodelay: Option<bool>,
+
   #[serde(default)]
   pub danger_accept_invalid_certs: bool,
-  pub proxy_protocol_write_timeout: Option<SDuration>,
-  #[serde(skip, default)]
+
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   pub state_open_connections: Arc<AtomicUsize>,
 
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   #[cfg(feature = "stats")]
   pub stats_total_read_bytes: Arc<AtomicU64>,
 
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   #[cfg(feature = "stats")]
   pub stats_total_write_bytes: Arc<AtomicU64>,
 
-  #[serde(skip, default)]
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
   #[cfg(feature = "stats")]
   pub stats_total_connections: Arc<AtomicU64>,
 }
@@ -477,9 +635,13 @@ pub struct StreamUpstream {
 pub enum StreamHandle {
   #[serde(rename = "proxy")]
   Proxy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     balance: Option<Balance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     retries: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     retry_backoff: Option<BackOff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_protocol_write_timeout: Option<SDuration>,
     upstream: Vec<StreamUpstream>,
   },
@@ -491,27 +653,40 @@ pub enum HttpHandle {
   #[serde(rename = "return")]
   Return {
     status: SStatusCode,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     response_headers: Vec<(SHeaderName, SHeaderValue)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     body: Option<String>,
   },
 
   #[serde(rename = "heap_profile")]
   HeapProfile {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    response_headers: Vec<(SHeaderName, SHeaderValue)>,
+  },
+
+  #[serde(rename = "stats")]
+  Stats {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     response_headers: Vec<(SHeaderName, SHeaderValue)>,
   },
 
   #[serde(rename = "proxy")]
   Proxy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     balance: Option<Balance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     retries: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     retry_backoff: Option<BackOff>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     response_headers: Vec<(SHeaderName, SHeaderValue)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_protocol_write_timeout: Option<SDuration>,
+    #[serde(skip_deserializing, default)]
+    state_round_robin_index: Arc<AtomicUsize>,
     upstream: Vec<HttpUpstream>,
   },
 
@@ -572,7 +747,7 @@ impl From<UpstreamVersion> for hyper::Version {
   feature = "compression-gzip",
   feature = "compression-deflate"
 ))]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Compress {
   pub algo: Encoding,

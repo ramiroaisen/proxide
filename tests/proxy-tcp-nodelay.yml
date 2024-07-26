@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=../config.schema.json
+
+proxy_tcp_nodelay: true
+
+http:
+
+  proxy_tcp_nodelay: true
+
+  apps:
+    - listen:
+        - addr: 13500
+      proxy_tcp_nodelay: true
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:13550
+            proxy_tcp_nodelay: true
+
+    - listen:
+        - addr: 13550
+      return:
+        status: 200
+        response_headers:
+          - [ content-type, text/plain ]
+          - [ x-test, proxy-tcp-nodelay ]
+stream:
+
+  proxy_tcp_nodelay: true
+
+  apps:
+    - listen:
+        - addr: 13501
+      proxy_tcp_nodelay: true
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:13500
+            proxy_tcp_nodelay: true

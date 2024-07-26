@@ -1,24 +1,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, str::FromStr};
 
 use crate::proxy_protocol::ExpectProxyProtocol;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Listen {
-  pub addr: SocketAddr,
-  pub ssl: Option<Ssl>,
-  pub expect_proxy_protocol: Option<ExpectProxyProtocol>,
-}
-
-crate::json_schema_as!(Listen => ListenHelper);
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ListenHelper {
   pub addr: PortOrAddr,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub ssl: Option<Ssl>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub expect_proxy_protocol: Option<ExpectProxyProtocol>,
 }
 
@@ -29,48 +21,65 @@ pub struct Ssl {
   pub key: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum PortOrAddr {
   Port(u16),
   Addr(SocketAddr),
 }
 
-pub fn deserialize_listen_vec<'de, D>(deserializer: D) -> Result<Vec<Listen>, D::Error>
-where
-  D: serde::Deserializer<'de>,
-{
-  let helper = Vec::<ListenHelper>::deserialize(deserializer)?;
-  let mut target: Vec<Listen> = vec![];
+impl FromStr for PortOrAddr {
+  type Err = std::num::ParseIntError;
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    if let Ok(port) = s.parse::<SocketAddr>() {
+      Ok(Self::Addr(port))
+    } else {
+      Ok(Self::Port(s.parse()?))
+    }
+  }
+}
 
-  for item in helper {
-    match &item.addr {
-      PortOrAddr::Addr(addr) => {
-        target.push(Listen {
-          addr: *addr,
-          ssl: item.ssl,
-          expect_proxy_protocol: item.expect_proxy_protocol,
-        });
-      }
+impl From<SocketAddr> for PortOrAddr {
+  fn from(addr: SocketAddr) -> Self {
+    Self::Addr(addr)
+  }
+}
 
-      PortOrAddr::Port(port) => {
-        let v4 = SocketAddr::from(([0, 0, 0, 0], *port));
-        let v6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], *port));
-        target.push(Listen {
-          addr: v4,
-          ssl: item.ssl.clone(),
-          expect_proxy_protocol: item.expect_proxy_protocol,
-        });
-        target.push(Listen {
-          addr: v6,
-          ssl: item.ssl,
-          expect_proxy_protocol: item.expect_proxy_protocol,
-        });
-      }
+impl From<u16> for PortOrAddr {
+  fn from(port: u16) -> Self {
+    Self::Port(port)
+  }
+}
+
+impl PortOrAddr {
+  pub fn addrs(self) -> Vec<SocketAddr> {
+    match self {
+      PortOrAddr::Port(port) => vec![
+        SocketAddr::from(([0, 0, 0, 0], port)),
+        SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], port)),
+      ],
+
+      PortOrAddr::Addr(addr) => vec![addr],
     }
   }
 
-  Ok(target)
+  pub fn matches_addr(self, addr: SocketAddr) -> bool {
+    match self {
+      PortOrAddr::Port(port) => addr.port() == port,
+      PortOrAddr::Addr(self_addr) => {
+        // different port or family (not match)
+        if (self_addr.is_ipv4(), self_addr.port()) != (addr.is_ipv4(), addr.port()) {
+          false
+        // unspecified matches all ips
+        } else if self_addr.ip().is_unspecified() {
+          true
+        // ips are the same
+        } else {
+          self_addr.ip() == addr.ip()
+        }
+      }
+    }
+  }
 }
 
 #[cfg(test)]
@@ -86,7 +95,7 @@ mod test {
           "addr": "0.0.0.0:8080"
         }"#,
         Listen {
-          addr: "0.0.0.0:8080".parse().unwrap(),
+          addr: "0.0.0.0:8080".parse::<SocketAddr>().unwrap().into(),
           ssl: None,
           expect_proxy_protocol: None,
         },
@@ -96,7 +105,17 @@ mod test {
           "addr": "[::ffff]:8080"
         }"#,
         Listen {
-          addr: "[::ffff]:8080".parse().unwrap(),
+          addr: "[::ffff]:8080".parse::<SocketAddr>().unwrap().into(),
+          ssl: None,
+          expect_proxy_protocol: None,
+        },
+      ),
+      (
+        r#"{
+          "addr": 443
+        }"#,
+        Listen {
+          addr: PortOrAddr::Port(443),
           ssl: None,
           expect_proxy_protocol: None,
         },
