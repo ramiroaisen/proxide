@@ -7,7 +7,7 @@ http:
     
   apps:
     - listen:
-        - addr: 10800
+        - addr: 14500
           ssl:
             cert: cert/self-signed-cert.pem
             key: cert/self-signed-key.pem
@@ -16,7 +16,7 @@ http:
             path: { exact: /h1 }
           proxy:
             upstream:
-              - base_url: https://127.0.0.1:10850
+              - base_url: https://127.0.0.1:14550
                 version: http/1.1
                 danger_accept_invalid_certs: true
 
@@ -24,18 +24,18 @@ http:
             path: { exact: /h2 }
           proxy:
             upstream:
-              - base_url: https://127.0.0.1:10850
+              - base_url: https://127.0.0.1:14550
                 version: http/2
                 danger_accept_invalid_certs: true
 
 stream:
   apps:
     - listen:
-        - addr: 10801
+        - addr: 14501
           ssl:
             cert: cert/self-signed-cert.pem
             key: cert/self-signed-key.pem
       proxy:
         upstream:
-          - origin: tls://127.0.0.1:10851
+          - origin: tls://127.0.0.1:14551
             danger_accept_invalid_certs: true

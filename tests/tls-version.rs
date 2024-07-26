@@ -22,7 +22,7 @@ fn tls_version() {
           dbg!(port, client_version, server_version, http_version);
 
           block_on(async move {
-            let listener = TcpListener::bind(&format!("127.0.0.1:1085{port}"))
+            let listener = TcpListener::bind(&format!("127.0.0.1:1455{port}"))
               .await
               .unwrap();
 
@@ -99,7 +99,7 @@ fn tls_version() {
                 _ => unreachable!(),
               };
 
-              let tcp = TcpStream::connect(format!("127.0.0.1:1080{port}"))
+              let tcp = TcpStream::connect(format!("127.0.0.1:1450{port}"))
                 .await
                 .unwrap();
 
@@ -125,7 +125,7 @@ fn tls_version() {
               let request = hyper::Request::builder()
                 .version(h_version)
                 .method("GET")
-                .uri(format!("https://127.0.0.1:1080{port}{path}"))
+                .uri(format!("https://127.0.0.1:145{port}{path}"))
                 .header("host", "example.com")
                 .body(Body::empty())
                 .unwrap();
