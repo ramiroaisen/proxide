@@ -29,7 +29,7 @@ use std::sync::atomic::AtomicU64;
 use crate::body::Body;
 use crate::config::{Config, HttpApp, HttpHandle, HttpUpstream, UpstreamVersion};
 use crate::net::timeout::TimeoutIo;
-use crate::config::defaults::{DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT};
+use crate::config::defaults::{DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY};
 use crate::proxy::error::{ErrorOriginator, ProxyHttpError};
 use crate::proxy_protocol::{self, ProxyHeader, ProxyProtocolVersion};
 use crate::serde::sni::Sni;
@@ -104,6 +104,7 @@ pub struct Key {
   pub sni: Option<Sni>,
   pub read_timeout: Duration,
   pub write_timeout: Duration,
+  pub tcp_nodelay: bool,
   pub accept_invalid_certs: bool,
   pub proxy_protocol: Option<ProxyProtocolConfig>
 }
@@ -153,12 +154,20 @@ impl Key {
       => DEFAULT_HTTP_PROXY_READ_TIMEOUT
     );
 
-    let write_timeout =crate::option!(
+    let write_timeout = crate::option!(
       @timeout
       upstream.proxy_write_timeout,
       app.proxy_write_timeout,
       config.http.proxy_write_timeout
       => DEFAULT_HTTP_PROXY_WRITE_TIMEOUT
+    );
+
+    let tcp_nodelay = crate::option!(
+      upstream.proxy_tcp_nodelay,
+      app.proxy_tcp_nodelay,
+      config.http.proxy_tcp_nodelay,
+      config.proxy_tcp_nodelay,
+      => DEFAULT_PROXY_TCP_NODELAY
     );
 
     let proxy_protocol_config = match upstream.send_proxy_protocol {
@@ -196,6 +205,7 @@ impl Key {
       sni: upstream.sni.clone(),
       read_timeout,
       write_timeout,
+      tcp_nodelay,
       accept_invalid_certs: upstream.danger_accept_invalid_certs,
       proxy_protocol: proxy_protocol_config,
     })
@@ -264,11 +274,11 @@ impl Sender {
     let tcp = connect
       .map_err(ConnectError::TcpConnect)?;
     
-    #[cfg(feature = "proxy-tcp-nodelay")]
-    if let Err(e) = tcp.set_nodelay(true) {
-      log::warn!("error setting tcp stream nodelay (client): {e}");
+    if key.tcp_nodelay {
+      tcp.set_nodelay(true)
+        .map_err(ConnectError::SetTcpNoDelay)?;
     }
-
+    
     #[cfg(feature = "stats")]
     let mut tcp = CountersIo::new(tcp, read_counter.clone(), write_counter.clone());
 
@@ -363,6 +373,7 @@ impl Sender {
                 .expect("cannot build tls client config with native roots")
                 .with_no_client_auth();
 
+              config.enable_sni = true;
               config.alpn_protocols = vec![$($alpn.to_vec())*];
               
               Arc::new(config)
@@ -384,6 +395,7 @@ impl Sender {
                 .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
                 .with_no_client_auth();
 
+              config.enable_sni = true;
               config.alpn_protocols = vec![$($alpn.to_vec())*];
 
               Arc::new(config)
@@ -594,6 +606,7 @@ impl Pool {
     write_counter: &Arc<AtomicU64>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
+    tcp_nodelay: bool,
     proxy_protocol_config: Option<ProxyProtocolConfig>
   ) -> Result<Response, ClientError> {
     
@@ -643,6 +656,7 @@ impl Pool {
       sni,
       read_timeout,
       write_timeout,
+      tcp_nodelay,
       accept_invalid_certs,
       proxy_protocol: proxy_protocol_config,
     };
@@ -1062,6 +1076,8 @@ pub enum ConnectError {
   TcpHandshake(#[from] hyper::Error),
   #[error("tls connect error: {0}")]
   TlsConnect(#[source] std::io::Error),
+  #[error("set tcp nodelay error: {0}")]
+  SetTcpNoDelay(#[source] std::io::Error),
   // #[error("tls ready error: {0}")]
   // TlsReady(Box<dyn std::error::Error + Send + Sync + 'static>),
   #[error("invalid uri: {0}")]
@@ -1106,6 +1122,7 @@ pub async fn send_request(
   write_counter: &Arc<AtomicU64>,
   read_timeout: Option<Duration>,
   write_timeout: Option<Duration>,
+  tcp_nodelay: bool,
   proxy_protocol_config: Option<ProxyProtocolConfig>
 ) -> Result<Response, ClientError> {
   GLOBAL_POOL.send_request(
@@ -1118,6 +1135,7 @@ pub async fn send_request(
     write_counter,
     read_timeout,
     write_timeout,
+    tcp_nodelay,
     proxy_protocol_config
   ).await
 }

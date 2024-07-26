@@ -1,6 +1,8 @@
 #![allow(clippy::declare_interior_mutable_const)] // silence const headers warning
 #![allow(non_camel_case_types)] // silence #[dynamic] warning
-#![allow(non_upper_case_globals)] // silence #[dynamic] warning
+#![allow(non_upper_case_globals)]
+use http::header::CONTENT_TYPE;
+// silence #[dynamic] warning
 use http::Uri;
 use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderValue, CONNECTION, HOST};
@@ -38,8 +40,9 @@ use crate::client::send_request;
 use crate::config::defaults::{
   DEFAULT_HTTP_BALANCE, DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_RETRIES,
   DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_HTTP_RETRY_BACKOFF,
-  DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_STREAM_BALANCE, DEFAULT_STREAM_PROXY_READ_TIMEOUT,
-  DEFAULT_STREAM_PROXY_RETRIES, DEFAULT_STREAM_PROXY_WRITE_TIMEOUT, DEFAULT_STREAM_RETRY_BACKOFF,
+  DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY, DEFAULT_STREAM_BALANCE,
+  DEFAULT_STREAM_PROXY_READ_TIMEOUT, DEFAULT_STREAM_PROXY_RETRIES,
+  DEFAULT_STREAM_PROXY_WRITE_TIMEOUT, DEFAULT_STREAM_RETRY_BACKOFF,
   DEFAULT_STREAM_SERVER_READ_TIMEOUT, DEFAULT_STREAM_SERVER_WRITE_TIMEOUT,
 };
 use crate::config::matcher::RequestInfo;
@@ -81,11 +84,11 @@ pub fn resolve_upstream_app<'a>(
 ) -> Option<&'a HttpApp> {
   for app in &config.http.apps {
     for listen in &app.listen {
-      if bind_addr != listen.addr {
+      if !listen.addr.matches_addr(bind_addr) {
         continue;
       }
 
-      if bind_ssl != listen.ssl.is_some() {
+      if listen.ssl.is_some() != bind_ssl {
         continue;
       }
 
@@ -205,6 +208,10 @@ pub async fn serve_proxy(
     let handle_proxy_headers: &[(SHeaderName, SHeaderValue)];
     let handle_response_headers: &[(SHeaderName, SHeaderValue)];
     let handle_proxy_protocol_write_timeout: Option<SDuration>;
+    let handle_state_round_robin_index: &Arc<AtomicUsize>;
+    let handle_proxy_read_timeout: Option<SDuration>;
+    let handle_proxy_write_timeout: Option<SDuration>;
+    let handle_proxy_tcp_nodelay: Option<bool>;
     let upstreams: &[HttpUpstream];
 
     // TODO: document this and move out of the service function
@@ -350,14 +357,29 @@ pub async fn serve_proxy(
           return Ok(response);
         }
 
-        #[allow(unused)]
+        HttpHandle::Stats { response_headers } => {
+          let json = serde_json::to_value(config).map_err(ProxyHttpError::StatsSerialize)?;
+          let yaml = serde_yaml::to_string(&json).unwrap();
+          let body = Body::full(yaml);
+
+          let mut res = Response::new(body);
+          *res.status_mut() = StatusCode::OK;
+          res.headers_mut().insert(
+            CONTENT_TYPE,
+            // HeaderValue::from_static("application/json;charset=utf-8"),
+            HeaderValue::from_static("text/plain;charset=utf-8"),
+          );
+          res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
+          add_headers!(res.headers_mut(), config.http.response_headers);
+          add_headers!(res.headers_mut(), app.response_headers);
+          add_headers!(res.headers_mut(), response_headers);
+          return Ok(res);
+        }
+
         HttpHandle::HeapProfile { response_headers } => {
-          #[cfg(not(all(target__os = "linux", feature = "jemalloc")))]
+          #[cfg(not(all(target_os = "linux", feature = "jemalloc")))]
           {
-            let mut res = Response::new(Body::full("Profilling was not activated at compile time"));
-            *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
-            return Ok(res);
+            return Err(ProxyHttpError::HeapProfileNotCompiled);
           }
 
           #[cfg(all(target_os = "linux", feature = "jemalloc"))]
@@ -373,49 +395,23 @@ pub async fn serve_proxy(
             };
 
             if !ctl.activated() {
-              let mut res = Response::new(Body::full("Profilling is not activated (2)"));
-              *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-              res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
-              res.headers_mut().append(
-                hyper::header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain"),
-              );
-              add_headers!(res.headers_mut(), config.http.response_headers);
-              add_headers!(res.headers_mut(), app.response_headers);
-              add_headers!(res.headers_mut(), response_headers);
-              return Ok(res);
+              return Err(ProxyHttpError::HeapProfileNotActivated);
             }
 
-            match ctl.dump_pprof() {
-              Ok(data) => {
-                drop(ctl);
-                let mut res = Response::new(Body::full(data));
-                *res.status_mut() = StatusCode::OK;
-                res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
-                res.headers_mut().insert(
-                  hyper::header::CONTENT_TYPE,
-                  HeaderValue::from_static("application/octet-stream"),
-                );
-                add_headers!(res.headers_mut(), config.http.response_headers);
-                add_headers!(res.headers_mut(), app.response_headers);
-                add_headers!(res.headers_mut(), response_headers);
-                return Ok(res);
-              }
-              Err(e) => {
-                drop(ctl);
-                let mut res = Response::new(Body::full(format!("error dumping profile: {e}")));
-                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
-                res.headers_mut().append(
-                  hyper::header::CONTENT_TYPE,
-                  HeaderValue::from_static("text/plain"),
-                );
-                add_headers!(res.headers_mut(), config.http.response_headers);
-                add_headers!(res.headers_mut(), app.response_headers);
-                add_headers!(res.headers_mut(), response_headers);
-                return Ok(res);
-              }
-            }
+            let dump = ctl.dump_pprof().map_err(ProxyHttpError::HeapProfileError)?;
+
+            drop(ctl);
+            let mut res = Response::new(Body::full(dump));
+            *res.status_mut() = StatusCode::OK;
+            res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
+            res.headers_mut().insert(
+              hyper::header::CONTENT_TYPE,
+              HeaderValue::from_static("application/octet-stream"),
+            );
+            add_headers!(res.headers_mut(), config.http.response_headers);
+            add_headers!(res.headers_mut(), app.response_headers);
+            add_headers!(res.headers_mut(), response_headers);
+            return Ok(res);
           }
         }
 
@@ -427,6 +423,10 @@ pub async fn serve_proxy(
           proxy_headers,
           response_headers,
           proxy_protocol_write_timeout,
+          state_round_robin_index,
+          proxy_read_timeout,
+          proxy_write_timeout,
+          proxy_tcp_nodelay,
         } => {
           handle_balance = *balance;
           upstreams = upstream;
@@ -435,6 +435,10 @@ pub async fn serve_proxy(
           handle_proxy_headers = proxy_headers;
           handle_response_headers = response_headers;
           handle_proxy_protocol_write_timeout = *proxy_protocol_write_timeout;
+          handle_state_round_robin_index = state_round_robin_index;
+          handle_proxy_read_timeout = *proxy_read_timeout;
+          handle_proxy_write_timeout = *proxy_write_timeout;
+          handle_proxy_tcp_nodelay = *proxy_tcp_nodelay;
           break 'handle;
         }
 
@@ -521,18 +525,21 @@ pub async fn serve_proxy(
 
     let retries = crate::option!(
       handle_retries,
+      app.retries,
       config.http.retries,
       => DEFAULT_HTTP_PROXY_RETRIES
     );
 
     let backoff = crate::option!(
       handle_retry_backoff,
+      app.retry_backoff,
       config.http.retry_backoff,
       => DEFAULT_HTTP_RETRY_BACKOFF
     );
 
     let balance = crate::option!(
       handle_balance,
+      app.balance,
       config.http.balance,
       => DEFAULT_HTTP_BALANCE
     );
@@ -546,7 +553,7 @@ pub async fn serve_proxy(
         upstreams,
         balance,
         remote_addr.ip(),
-        &app.state_round_robin_index,
+        handle_state_round_robin_index,
       );
 
       'upstreams: for upstream in sorted_upstreams {
@@ -642,6 +649,7 @@ pub async fn serve_proxy(
         let read_timeout = crate::option!(
           @timeout
           upstream.proxy_read_timeout,
+          handle_proxy_read_timeout,
           app.proxy_read_timeout,
           config.http.proxy_read_timeout
           => DEFAULT_HTTP_PROXY_READ_TIMEOUT
@@ -650,9 +658,19 @@ pub async fn serve_proxy(
         let write_timeout = crate::option!(
           @timeout
           upstream.proxy_write_timeout,
+          handle_proxy_write_timeout,
           app.proxy_write_timeout,
           config.http.proxy_write_timeout
           => DEFAULT_HTTP_PROXY_WRITE_TIMEOUT
+        );
+
+        let proxy_tcp_nodelay = crate::option!(
+          upstream.proxy_tcp_nodelay,
+          handle_proxy_tcp_nodelay,
+          app.proxy_tcp_nodelay,
+          config.http.proxy_tcp_nodelay,
+          config.proxy_tcp_nodelay,
+          => DEFAULT_PROXY_TCP_NODELAY
         );
 
         let request = root_request.take().expect("root request loop take");
@@ -712,6 +730,7 @@ pub async fn serve_proxy(
             &upstream.stats_total_write_bytes,
             Some(read_timeout),
             Some(write_timeout),
+            proxy_tcp_nodelay,
             proxy_protocol_config,
           )
           .await
@@ -884,6 +903,7 @@ pub async fn serve_proxy(
               &upstream.stats_total_write_bytes,
               Some(read_timeout),
               Some(write_timeout),
+              proxy_tcp_nodelay,
               proxy_protocol_config,
             )
             .await
@@ -926,6 +946,7 @@ pub async fn serve_proxy(
               &upstream.stats_total_write_bytes,
               Some(read_timeout),
               Some(write_timeout),
+              proxy_tcp_nodelay,
               proxy_protocol_config,
             )
             .await
@@ -1083,7 +1104,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
   let app = 'resolve: {
     for app in &config.stream.apps {
       for listen in &app.listen {
-        if listen.addr == local_addr && listen.ssl.is_some() == is_ssl {
+        if listen.addr.matches_addr(local_addr) && listen.ssl.is_some() == is_ssl {
           break 'resolve app;
         }
       }
@@ -1098,6 +1119,9 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
     handle_stream_retries,
     handle_stream_retry_backoff,
     handle_proxy_protocol_write_timeout,
+    handle_proxy_read_timeout,
+    handle_proxy_write_timeout,
+    handle_proxy_tcp_nodelay,
   ) = match &app.handle {
     StreamHandle::Proxy {
       balance,
@@ -1105,12 +1129,18 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       retries: stream_retries,
       retry_backoff: stream_retry_backoff,
       proxy_protocol_write_timeout,
+      proxy_read_timeout,
+      proxy_write_timeout,
+      proxy_tcp_nodelay,
     } => (
       upstream,
       *balance,
       *stream_retries,
       *stream_retry_backoff,
       *proxy_protocol_write_timeout,
+      *proxy_read_timeout,
+      *proxy_write_timeout,
+      *proxy_tcp_nodelay,
     ),
   };
 
@@ -1183,6 +1213,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
           let proxy_read_timeout = crate::option!(
             @timeout
             upstream.proxy_read_timeout,
+            handle_proxy_read_timeout,
             app.proxy_read_timeout,
             config.stream.proxy_read_timeout
             => DEFAULT_STREAM_PROXY_READ_TIMEOUT
@@ -1191,9 +1222,19 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
           let proxy_write_timeout = crate::option!(
             @timeout
             upstream.proxy_write_timeout,
+            handle_proxy_write_timeout,
             app.proxy_write_timeout,
             config.stream.proxy_write_timeout
             => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
+          );
+
+          let proxy_tcp_nodelay = crate::option!(
+            upstream.proxy_tcp_nodelay,
+            handle_proxy_tcp_nodelay,
+            app.proxy_tcp_nodelay,
+            config.stream.proxy_tcp_nodelay,
+            config.proxy_tcp_nodelay,
+            => DEFAULT_PROXY_TCP_NODELAY
           );
 
           // unwrap: upstream origin host is checked at construction
@@ -1216,6 +1257,12 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
               continue 'upstreams;
             }
           };
+
+          if proxy_tcp_nodelay {
+            proxy_stream
+              .set_nodelay(true)
+              .map_err(ProxyStreamError::SetTcpNoDelay)?;
+          }
 
           #[cfg(feature = "stats")]
           let mut proxy_stream = CountersIo::new(
@@ -1279,7 +1326,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
                 true => {
                   #[dynamic]
                   static DANGER_TLS_NO_CERT_VERFIER_CONNECTOR: tokio_rustls::TlsConnector = {
-                    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+                    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
                       crate::tls::crypto::default_provider(),
                     ))
                     .with_safe_default_protocol_versions()
@@ -1287,6 +1334,8 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
                     .dangerous()
                     .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
                     .with_no_client_auth();
+
+                    config.enable_sni = true;
                     tokio_rustls::TlsConnector::from(Arc::new(config))
                   };
 

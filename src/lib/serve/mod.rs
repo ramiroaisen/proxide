@@ -553,7 +553,6 @@ pub async fn serve_ssl_with_config<S, Sig>(
             }
           };
 
-
           let tls_acceptor = tls_acceptor.clone();
           let conn_sender = conn_sender.clone();
 

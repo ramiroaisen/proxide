@@ -411,85 +411,87 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
   // collect all addr/port/protocol in the sets/maps (http/s)
   for app in &config.http.apps {
     for listen in &app.listen {
-      match &listen.ssl {
-        None => {
-          if https_bind.contains_key(&listen.addr) {
-            anyhow::bail!(
-              "https and http cannot bind to same port at {} in config file",
-              listen.addr,
-            );
-          }
-
-          match http_bind.entry(listen.addr) {
-            Entry::Vacant(entry) => {
-              entry.insert(listen.expect_proxy_protocol);
+      for addr in listen.addr.addrs() {
+        match &listen.ssl {
+          None => {
+            if https_bind.contains_key(&addr) {
+              anyhow::bail!(
+                "https and http cannot bind to same port at {} in config file",
+                addr,
+              );
             }
 
-            Entry::Occupied(entry) => {
-              if listen.expect_proxy_protocol != *entry.get() {
-                anyhow::bail!(
-                  "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
-                  listen.addr,
-                );
-              }
-            }
-          }
-        }
-
-        Some(ssl) => {
-          if http_bind.contains_key(&listen.addr) {
-            anyhow::bail!(
-              "https and http cannot bind to same port at {} in config file",
-              listen.addr,
-            );
-          }
-
-          match https_bind.get(&listen.addr) {
-            None => {}
-            Some((expect_proxy_protocol, _)) => {
-              if *expect_proxy_protocol != listen.expect_proxy_protocol {
-                anyhow::bail!(
-                  "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
-                  listen.addr,
-                );
-              }
-            }
-          }
-
-          let iter = match app.server_names.as_ref() {
-            Some(list) => list.as_slice(),
-            None => &[ServerName::All],
-          };
-
-          for server_name in iter {
-            let https_hosts = &mut https_bind
-              .entry(listen.addr)
-              .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))
-              .1;
-
-            match https_hosts.entry(server_name.clone()) {
-              Entry::Occupied(_) => {
-                anyhow::bail!(
-                  "duplicate listen address + server name in config file at address: {} server name: {}",
-                  listen.addr,
-                  server_name
-                );
-              }
-
+            match http_bind.entry(addr) {
               Entry::Vacant(entry) => {
-                let certs_der = load_certs(&ssl.cert)
-                  .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
+                entry.insert(listen.expect_proxy_protocol);
+              }
 
-                let key_der = load_private_key(&ssl.key)
-                  .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+              Entry::Occupied(entry) => {
+                if listen.expect_proxy_protocol != *entry.get() {
+                  anyhow::bail!(
+                    "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
+                    addr,
+                  );
+                }
+              }
+            }
+          }
 
-                let signing_key = crypto::sign::any_supported_type(&key_der)
-                  .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
+          Some(ssl) => {
+            if http_bind.contains_key(&addr) {
+              anyhow::bail!(
+                "https and http cannot bind to same port at {} in config file",
+                addr,
+              );
+            }
 
-                let certified_key =
-                  Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
+            match https_bind.get(&addr) {
+              None => {}
+              Some((expect_proxy_protocol, _)) => {
+                if *expect_proxy_protocol != listen.expect_proxy_protocol {
+                  anyhow::bail!(
+                    "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
+                    addr,
+                  );
+                }
+              }
+            }
 
-                entry.insert(certified_key);
+            let iter = match app.server_names.as_ref() {
+              Some(list) => list.as_slice(),
+              None => &[ServerName::All],
+            };
+
+            for server_name in iter {
+              let https_hosts = &mut https_bind
+                .entry(addr)
+                .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))
+                .1;
+
+              match https_hosts.entry(server_name.clone()) {
+                Entry::Occupied(_) => {
+                  anyhow::bail!(
+                    "duplicate listen address + server name in config file at address: {} server name: {}",
+                    addr,
+                    server_name
+                  );
+                }
+
+                Entry::Vacant(entry) => {
+                  let certs_der = load_certs(&ssl.cert)
+                    .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
+
+                  let key_der = load_private_key(&ssl.key)
+                    .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+
+                  let signing_key = crypto::sign::any_supported_type(&key_der)
+                    .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
+
+                  let certified_key =
+                    Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
+
+                  entry.insert(certified_key);
+                }
               }
             }
           }
@@ -501,46 +503,45 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
   // collect all addr/port in the sets/maps (tcp/ssl)
   for stream in &config.stream.apps {
     for listen in &stream.listen {
-      match &listen.ssl {
-        None => {
-          let exists = https_bind.contains_key(&listen.addr)
-            || http_bind.contains_key(&listen.addr)
-            || stream_ssl_bind.contains_key(&listen.addr)
-            || stream_tcp_bind.contains_key(&listen.addr);
+      for addr in listen.addr.addrs() {
+        match &listen.ssl {
+          None => {
+            let exists = https_bind.contains_key(&addr)
+              || http_bind.contains_key(&addr)
+              || stream_ssl_bind.contains_key(&addr)
+              || stream_tcp_bind.contains_key(&addr);
 
-          if exists {
-            anyhow::bail!(
-              "duplicated listen address (tcp stream) at {} in config file",
-              listen.addr,
-            );
+            if exists {
+              anyhow::bail!(
+                "duplicated listen address (tcp stream) at {} in config file",
+                addr,
+              );
+            }
+
+            stream_tcp_bind.insert(addr, listen.expect_proxy_protocol);
           }
 
-          stream_tcp_bind.insert(listen.addr, listen.expect_proxy_protocol);
-        }
+          Some(ssl) => {
+            let exists = https_bind.contains_key(&addr)
+              || http_bind.contains_key(&addr)
+              || stream_ssl_bind.contains_key(&addr)
+              || stream_tcp_bind.contains_key(&addr);
 
-        Some(ssl) => {
-          let exists = https_bind.contains_key(&listen.addr)
-            || http_bind.contains_key(&listen.addr)
-            || stream_ssl_bind.contains_key(&listen.addr)
-            || stream_tcp_bind.contains_key(&listen.addr);
+            if exists {
+              anyhow::bail!(
+                "duplicated listen address (ssl stream) at {} in config file",
+                addr,
+              );
+            }
 
-          if exists {
-            anyhow::bail!(
-              "duplicated listen address (ssl stream) at {} in config file",
-              listen.addr,
-            );
+            let certs_der = load_certs(&ssl.cert)
+              .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
+
+            let key_der = load_private_key(&ssl.key)
+              .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+
+            stream_ssl_bind.insert(addr, (certs_der, key_der, listen.expect_proxy_protocol));
           }
-
-          let certs_der = load_certs(&ssl.cert)
-            .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
-
-          let key_der = load_private_key(&ssl.key)
-            .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
-
-          stream_ssl_bind.insert(
-            listen.addr,
-            (certs_der, key_der, listen.expect_proxy_protocol),
-          );
         }
       }
     }
@@ -787,6 +788,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
       match handle {
         HttpHandle::Return { .. } => {}
         HttpHandle::HeapProfile { .. } => {}
+        HttpHandle::Stats { .. } => {}
         HttpHandle::Proxy { upstream, .. } => {
           for upstream in upstream.iter() {
             let key = Key::from_config(config, app, upstream).with_context(|| {
