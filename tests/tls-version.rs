@@ -32,13 +32,20 @@ fn tls_version() {
               _ => unreachable!(),
             };
 
-            let config = rustls::ServerConfig::builder_with_protocol_versions(&[server_version])
-              .with_no_client_auth()
-              .with_single_cert(
-                proxide::tls::load_certs("cert/self-signed-cert.pem").unwrap(),
-                proxide::tls::load_private_key("cert/self-signed-key.pem").unwrap(),
-              )
-              .unwrap();
+            let mut config =
+              rustls::ServerConfig::builder_with_protocol_versions(&[server_version])
+                .with_no_client_auth()
+                .with_single_cert(
+                  proxide::tls::load_certs("cert/self-signed-cert.pem").unwrap(),
+                  proxide::tls::load_private_key("cert/self-signed-key.pem").unwrap(),
+                )
+                .unwrap();
+
+            config.alpn_protocols = vec![match http_version {
+              1 => b"http/1.1".to_vec(),
+              2 => b"h2".to_vec(),
+              _ => unreachable!(),
+            }];
 
             let acceptor = TlsAcceptor::from(Arc::new(config));
 
@@ -94,10 +101,17 @@ fn tls_version() {
                 .await
                 .unwrap();
 
-              let config = rustls::ClientConfig::builder_with_protocol_versions(&[client_version])
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
-                .with_no_client_auth();
+              let mut config =
+                rustls::ClientConfig::builder_with_protocol_versions(&[client_version])
+                  .dangerous()
+                  .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
+                  .with_no_client_auth();
+
+              config.alpn_protocols = vec![match http_version {
+                1 => b"http/1.1".to_vec(),
+                2 => b"h2".to_vec(),
+                _ => unreachable!(),
+              }];
 
               let connector = TlsConnector::from(Arc::new(config));
 
