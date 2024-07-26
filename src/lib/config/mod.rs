@@ -448,6 +448,14 @@ pub struct HttpApp {
   pub compression_min_size: Option<u64>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub balance: Option<Balance>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub retries: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub retry_backoff: Option<BackOff>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_read_timeout: Option<SDuration>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
@@ -643,6 +651,12 @@ pub enum StreamHandle {
     retry_backoff: Option<BackOff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_protocol_write_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_read_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_write_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_tcp_nodelay: Option<bool>,
     upstream: Vec<StreamUpstream>,
   },
 }
@@ -679,6 +693,12 @@ pub enum HttpHandle {
     retries: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retry_backoff: Option<BackOff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_read_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_write_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_tcp_nodelay: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

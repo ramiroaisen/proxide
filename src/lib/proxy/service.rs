@@ -209,6 +209,9 @@ pub async fn serve_proxy(
     let handle_response_headers: &[(SHeaderName, SHeaderValue)];
     let handle_proxy_protocol_write_timeout: Option<SDuration>;
     let handle_state_round_robin_index: &Arc<AtomicUsize>;
+    let handle_proxy_read_timeout: Option<SDuration>;
+    let handle_proxy_write_timeout: Option<SDuration>;
+    let handle_proxy_tcp_nodelay: Option<bool>;
     let upstreams: &[HttpUpstream];
 
     // TODO: document this and move out of the service function
@@ -421,6 +424,9 @@ pub async fn serve_proxy(
           response_headers,
           proxy_protocol_write_timeout,
           state_round_robin_index,
+          proxy_read_timeout,
+          proxy_write_timeout,
+          proxy_tcp_nodelay,
         } => {
           handle_balance = *balance;
           upstreams = upstream;
@@ -430,6 +436,9 @@ pub async fn serve_proxy(
           handle_response_headers = response_headers;
           handle_proxy_protocol_write_timeout = *proxy_protocol_write_timeout;
           handle_state_round_robin_index = state_round_robin_index;
+          handle_proxy_read_timeout = *proxy_read_timeout;
+          handle_proxy_write_timeout = *proxy_write_timeout;
+          handle_proxy_tcp_nodelay = *proxy_tcp_nodelay;
           break 'handle;
         }
 
@@ -516,18 +525,21 @@ pub async fn serve_proxy(
 
     let retries = crate::option!(
       handle_retries,
+      app.retries,
       config.http.retries,
       => DEFAULT_HTTP_PROXY_RETRIES
     );
 
     let backoff = crate::option!(
       handle_retry_backoff,
+      app.retry_backoff,
       config.http.retry_backoff,
       => DEFAULT_HTTP_RETRY_BACKOFF
     );
 
     let balance = crate::option!(
       handle_balance,
+      app.balance,
       config.http.balance,
       => DEFAULT_HTTP_BALANCE
     );
@@ -637,6 +649,7 @@ pub async fn serve_proxy(
         let read_timeout = crate::option!(
           @timeout
           upstream.proxy_read_timeout,
+          handle_proxy_read_timeout,
           app.proxy_read_timeout,
           config.http.proxy_read_timeout
           => DEFAULT_HTTP_PROXY_READ_TIMEOUT
@@ -645,6 +658,7 @@ pub async fn serve_proxy(
         let write_timeout = crate::option!(
           @timeout
           upstream.proxy_write_timeout,
+          handle_proxy_write_timeout,
           app.proxy_write_timeout,
           config.http.proxy_write_timeout
           => DEFAULT_HTTP_PROXY_WRITE_TIMEOUT
@@ -652,6 +666,7 @@ pub async fn serve_proxy(
 
         let proxy_tcp_nodelay = crate::option!(
           upstream.proxy_tcp_nodelay,
+          handle_proxy_tcp_nodelay,
           app.proxy_tcp_nodelay,
           config.http.proxy_tcp_nodelay,
           config.proxy_tcp_nodelay,
@@ -1104,6 +1119,9 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
     handle_stream_retries,
     handle_stream_retry_backoff,
     handle_proxy_protocol_write_timeout,
+    handle_proxy_read_timeout,
+    handle_proxy_write_timeout,
+    handle_proxy_tcp_nodelay,
   ) = match &app.handle {
     StreamHandle::Proxy {
       balance,
@@ -1111,12 +1129,18 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       retries: stream_retries,
       retry_backoff: stream_retry_backoff,
       proxy_protocol_write_timeout,
+      proxy_read_timeout,
+      proxy_write_timeout,
+      proxy_tcp_nodelay,
     } => (
       upstream,
       *balance,
       *stream_retries,
       *stream_retry_backoff,
       *proxy_protocol_write_timeout,
+      *proxy_read_timeout,
+      *proxy_write_timeout,
+      *proxy_tcp_nodelay,
     ),
   };
 
@@ -1189,6 +1213,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
           let proxy_read_timeout = crate::option!(
             @timeout
             upstream.proxy_read_timeout,
+            handle_proxy_read_timeout,
             app.proxy_read_timeout,
             config.stream.proxy_read_timeout
             => DEFAULT_STREAM_PROXY_READ_TIMEOUT
@@ -1197,6 +1222,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
           let proxy_write_timeout = crate::option!(
             @timeout
             upstream.proxy_write_timeout,
+            handle_proxy_write_timeout,
             app.proxy_write_timeout,
             config.stream.proxy_write_timeout
             => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
@@ -1204,6 +1230,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
 
           let proxy_tcp_nodelay = crate::option!(
             upstream.proxy_tcp_nodelay,
+            handle_proxy_tcp_nodelay,
             app.proxy_tcp_nodelay,
             config.stream.proxy_tcp_nodelay,
             config.proxy_tcp_nodelay,
