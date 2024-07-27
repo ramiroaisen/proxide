@@ -49,6 +49,8 @@ fn tls_version() {
               _ => unreachable!(),
             };
 
+            dbg!(server_version, &config, http_version);
+
             let acceptor = TlsAcceptor::from(Arc::new(config));
 
             let server = async move {
@@ -99,9 +101,9 @@ fn tls_version() {
                 _ => unreachable!(),
               };
 
-              let tcp = TcpStream::connect(format!("127.0.0.1:1450{port}"))
-                .await
-                .unwrap();
+              let addr: std::net::SocketAddr = format!("127.0.0.1:1450{port}").parse().unwrap();
+
+              let tcp = TcpStream::connect(&addr).await.unwrap();
 
               let mut config =
                 rustls::ClientConfig::builder_with_protocol_versions(&[client_version])
@@ -114,6 +116,8 @@ fn tls_version() {
                 2 => config.alpn_protocols.push(b"h2".to_vec()),
                 _ => unreachable!(),
               };
+
+              dbg!(addr, client_version, path, h_version, &config,);
 
               let connector = TlsConnector::from(Arc::new(config));
 
