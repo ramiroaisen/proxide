@@ -2,5 +2,11 @@
 [build]
 rustflags = ["--cfg", "tokio_unstable"]
 
+[profile.release]
+lto = "fat"
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+
 [test]
 rustflags = ["--cfg", "tokio_unstable"]

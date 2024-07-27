@@ -16,6 +16,8 @@ path = "src/bin/proxide.rs"
 default = ["full"]
 full = [
   # "proctitle",
+  # "aws_lc_rs",
+  "log-info",
   "jemalloc",
   "primary-log",
   "access-log",
@@ -40,29 +42,31 @@ primary-log = []
 server-tcp-nodelay = []
 tracing = ["tokio/tracing", "dep:console-subscriber"]
 log-state = []
-log-off = ["log/max_level_off"]
-log-error = ["log/max_level_error"]
-log-warn = ["log/max_level_warn"]
-log-info = ["log/max_level_info"]
-log-debug = ["log/max_level_debug"]
-# ring = [ "rustls/ring", "hyper-rustls/ring", "tokio-rustls/ring" ]
+log-off = ["log/release_max_level_off"]
+log-error = ["log/release_max_level_error"]
+log-warn = ["log/release_max_level_warn"]
+log-info = ["log/release_max_level_info"]
+log-debug = ["log/release_max_level_debug"]
+# add aws_lc_rs support for windows
+# ring = [ "rustls/ring" ]
+# aws_lc_rs = [ "rustls/aws_lc_rs" ]
 
 [dependencies]
-rustls = { version = "0.23.8", default-features = false, features = [ "std", "ring" ] }   
-hyper-rustls = { version = "0.27.1", default-features = false, features = ["ring", "http1", "http2", "log", "native-tokio", "rustls-native-certs", "tls12"] }
-tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring"] }
+rustls = { version = "0.23.12", default-features = false, features = [ "std", "tls12", "brotli", "zlib", "ring" ] }   
+# we only need hyper-rustls for the .with_native_roots() extension method on the rustls Config builder
+hyper-rustls = { version = "0.27.1", default-features = false, features = [ "rustls-native-certs" ] }
+tokio-rustls = { version = "0.26.0", default-features = false, features = [] }
 rustls-pemfile = "2.1.2"
 anyhow = "1.0.86"
 async-stream = "0.3.5"
 bytes = "1.6.0"
-env_logger = "0.11.3"
 futures = "0.3.30"
 http-body = "1.0.0"
 http-body-util = "0.1.1"
 hyper = { version = "1.4.1", features = ["full"] }
 hyper-util = { version = "0.1.6", features = ["full"] }
 indexmap = { version = "2.2.6", features = ["serde"] }
-log = { version = "0.4.21" } 
+log = { version = "0.4.21", features = ["std"]} 
 once_cell = { version = "1.19.0", features = ["parking_lot"] }
 pin-project = "1.1.5"
 rand = "0.8.5"
@@ -99,11 +103,11 @@ schemars = { version = "0.8.21", features = ["url", "derive", "preserve_order", 
 base64 = "0.22.1"
 defer = "0.2.1"
 proxy-header = "0.1.2"
-ppp = "2.2.0"
 nix = { version = "0.29.0", features = ["process", "signal"] }
 rustls-pki-types = { version = "1.7.0", features = ["std"] }
 async-tungstenite = { version = "0.27.0", features = ["tokio", "tokio-runtime"] }
 const-str = "0.5.7"
+rustls-native-certs = "0.7.1"
 
 [dev-dependencies]
 local-ip-address = "0.6.1"
@@ -124,6 +128,10 @@ tikv-jemallocator = { version = "0.5.4", optional = true, features = ["profiling
 
 [package.metadata.cargo-all-features]
 # Exclude certain features from the build-all-features matrix
+# skip_feature_sets = [
+#   ["aws_lc_rs", "ring"],
+# ]
+
 denylist = [
   "log-off",
   "log-error",

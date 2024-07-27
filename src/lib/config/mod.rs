@@ -337,9 +337,27 @@ impl Http {
         retry_backoff: None,
         proxy_protocol_write_timeout: None,
         graceful_shutdown_timeout: None,
-        compression: None,
-        compression_content_types: None,
-        compression_min_size: None,
+        #[cfg(any(
+          feature = "compression-br",
+          feature = "compression-zstd",
+          feature = "compression-gzip",
+          feature = "compression-deflate"
+        ))]
+          compression: None,
+        #[cfg(any(
+          feature = "compression-br",
+          feature = "compression-zstd",
+          feature = "compression-gzip",
+          feature = "compression-deflate"
+        ))]
+          compression_content_types: None,
+        #[cfg(any(
+          feature = "compression-br",
+          feature = "compression-zstd",
+          feature = "compression-gzip",
+          feature = "compression-deflate"
+        ))]
+          compression_min_size: None,
         server_read_timeout: None,
         server_write_timeout: None,
         proxy_read_timeout: None,
@@ -488,10 +506,6 @@ pub struct StreamApp {
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_tcp_nodelay: Option<bool>,
-
-  #[serde(skip_deserializing, default)]
-  #[schemars(skip)]
-  pub state_round_robin_index: Arc<AtomicUsize>,
 
   #[serde(flatten)]
   pub handle: StreamHandle,
@@ -657,6 +671,9 @@ pub enum StreamHandle {
     proxy_write_timeout: Option<SDuration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_tcp_nodelay: Option<bool>,
+    #[serde(default, skip_deserializing)]
+    #[schemars(skip)]
+    state_round_robin_index: Arc<AtomicUsize>,
     upstream: Vec<StreamUpstream>,
   },
 }
