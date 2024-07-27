@@ -4,6 +4,7 @@ use hyper::{body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use proxide::body::Body;
 use proxide::tls::danger_no_cert_verifier::DangerNoCertVerifier;
+use std::time::Duration;
 use std::{convert::Infallible, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -54,35 +55,56 @@ fn tls_version() {
             let acceptor = TlsAcceptor::from(Arc::new(config));
 
             let server = async move {
-              let (stream, _) = listener.accept().await.unwrap();
-              let tls_stream = acceptor.accept(stream).await.unwrap();
+              loop {
+                let (stream, _) = listener.accept().await.unwrap();
 
-              let service = service_fn(|_: Request<Incoming>| async move {
-                let mut res = Response::new(Body::empty());
-                res
-                  .headers_mut()
-                  .insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
-                res.headers_mut().insert(
-                  HeaderName::from_static("x-test"),
-                  HeaderValue::from_static("tls-version"),
-                );
-                Ok::<_, Infallible>(res)
-              });
+                let acceptor = acceptor.clone();
 
-              match http_version {
-                1 => hyper::server::conn::http1::Builder::new()
-                  .serve_connection(TokioIo::new(tls_stream), service)
-                  .await
-                  .unwrap(),
-                2 => hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-                  .serve_connection(TokioIo::new(tls_stream), service)
-                  .await
-                  .unwrap(),
-                _ => unreachable!(),
+                tokio::spawn(async move {
+                  let tls_stream = match acceptor.accept(stream).await {
+                    Ok(tls_stream) => tls_stream,
+                    Err(e) => {
+                      log::warn!("error accepting tls stream: {e}");
+                      return;
+                    }
+                  };
+
+                  let service = service_fn(|_: Request<Incoming>| async move {
+                    let mut res = Response::new(Body::empty());
+                    res
+                      .headers_mut()
+                      .insert(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+                    res.headers_mut().insert(
+                      HeaderName::from_static("x-test"),
+                      HeaderValue::from_static("tls-version"),
+                    );
+                    Ok::<_, Infallible>(res)
+                  });
+
+                  let fut = match http_version {
+                    1 => {
+                      hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(tls_stream), service)
+                        .await
+                    }
+                    2 => {
+                      hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                        .serve_connection(TokioIo::new(tls_stream), service)
+                        .await
+                    }
+                    _ => unreachable!(),
+                  };
+
+                  if let Err(e) = fut {
+                    log::warn!("error handling tls stream: {e}");
+                  }
+                });
               }
             };
 
             let client = async move {
+              tokio::time::sleep(Duration::from_millis(50)).await;
+
               let client_version = match client_version {
                 2 => &rustls::version::TLS12,
                 3 => &rustls::version::TLS13,
