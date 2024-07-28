@@ -27,8 +27,9 @@ use tokio_util::time::FutureExt;
 use crate::{
   graceful::GracefulGuard,
   net::timeout::TimeoutIo,
+  proxy::service::MakeHttpService,
   proxy_protocol::{ExpectProxyProtocol, ProxyHeader},
-  service::{AddrService, Connection, StreamService},
+  service::{Connection, StreamService},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -140,9 +141,10 @@ fn server() -> auto::Builder<TokioExecutor> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn serve_http<A, S, B, Sig>(
+pub async fn serve_http<M, S, B, Sig>(
+  local_addr: SocketAddr,
   tcp: TcpListener,
-  addr_service: A,
+  make_service: M,
   signal: Sig,
   read_timeout: Duration,
   write_timeout: Duration,
@@ -150,7 +152,7 @@ pub async fn serve_http<A, S, B, Sig>(
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
   proxy_protocol_read_timeout: Duration,
 ) where
-  A: AddrService<S>,
+  M: MakeHttpService<Service = S>,
   S: Clone,
   S: Service<Request<Incoming>, Response = Response<B>> + Send + 'static,
   <S as Service<Request<Incoming>>>::Future: Send + 'static,
@@ -251,7 +253,7 @@ pub async fn serve_http<A, S, B, Sig>(
         write_timeout,
       )));
 
-      let service = addr_service.make_service(remote_addr, proxy_header);
+      let service = make_service.make_service(local_addr, remote_addr, false, proxy_header);
       let conn = http
         .serve_connection_with_upgrades(io, service)
         .into_owned();
@@ -284,10 +286,11 @@ pub async fn serve_http<A, S, B, Sig>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn serve_https<A, S, B, Sig>(
+pub async fn serve_https<M, S, B, Sig>(
+  local_addr: SocketAddr,
   tcp: TcpListener,
-  config: Arc<ServerConfig>,
-  addr_service: A,
+  tls_config: Arc<ServerConfig>,
+  make_service: M,
   signal: Sig,
   read_timeout: Duration,
   write_timeout: Duration,
@@ -295,7 +298,7 @@ pub async fn serve_https<A, S, B, Sig>(
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
   proxy_protocol_read_timeout: Duration,
 ) where
-  A: AddrService<S>,
+  M: MakeHttpService<Service = S>,
   S: Clone,
   S: Service<Request<Incoming>, Response = Response<B>> + Send + 'static,
   <S as Service<Request<Incoming>>>::Future: Send + 'static,
@@ -308,7 +311,7 @@ pub async fn serve_https<A, S, B, Sig>(
   B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
   Sig: Future<Output = ()>,
 {
-  let tls_acceptor = TlsAcceptor::from(config);
+  let tls_acceptor = TlsAcceptor::from(tls_config);
 
   let graceful = crate::graceful::GracefulShutdown::new();
 
@@ -398,7 +401,7 @@ pub async fn serve_https<A, S, B, Sig>(
         write_timeout,
       )));
 
-      let service = addr_service.make_service(remote_addr, proxy_header);
+      let service = make_service.make_service(local_addr, remote_addr, true, proxy_header);
       let conn = http
         .serve_connection_with_upgrades(io, service)
         .into_owned();

@@ -16,7 +16,7 @@ BREW_CMD=$(which brew 2>/dev/null)
 RUSTUP_CMD=$(which rustup 2>/dev/null)
 CARGO_CMD=$(which cargo 2>/dev/null)
 
-if [[ ! -z $DNF_CMD ]] &&| [[ ! -z RUSTUP_CMD ]]; then
+if [[ ! -z $DNF_CMD ]] && [[ ! -z RUSTUP_CMD ]]; then
   cargo install cargo-all-features
   cargo install cargo-zigbuild
   cargo install just
