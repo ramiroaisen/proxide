@@ -1,13 +1,19 @@
-use std::{pin::Pin, task::{Context, Poll}};
 use futures::FutureExt;
 use http::Uri;
 use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioIo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWriteExt}, net::TcpStream};
-use tower::Service;
 use std::future::Future;
-use std::net::{SocketAddr, IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::{
+  pin::Pin,
+  task::{Context, Poll},
+};
+use tokio::{
+  io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+  net::TcpStream,
+};
+use tower::Service;
 
 use crate::client::pool::ProxyProtocolConfig;
 
@@ -52,16 +58,16 @@ pub enum ProxyHeader {
   // v1 or v2
   Tcp6(Tcp6Addresses),
   // v2 only
-  Unix(UnixAddresses),
+  // boxing here reduces the size of the enum, this should not be a problem since this variant will be very infrequent
+  Unix(Box<UnixAddresses>),
 }
 
 impl ProxyHeader {
-
   pub fn can_losslessly_convert_to_v1(&self) -> bool {
     match self {
       ProxyHeader::Unknown => true,
       ProxyHeader::Unspecified => false, // converted to unknown
-      ProxyHeader::Local => false, // converted to unknown
+      ProxyHeader::Local => false,       // converted to unknown
       ProxyHeader::Tcp4(_) => true,
       ProxyHeader::Tcp6(_) => true,
       ProxyHeader::Unix(_) => false,
@@ -96,39 +102,27 @@ impl ProxyHeader {
 pub struct FamilyMismatch;
 
 impl TryFrom<(SocketAddr, SocketAddr)> for ProxyHeader {
-
   type Error = FamilyMismatch;
 
   fn try_from(value: (SocketAddr, SocketAddr)) -> Result<Self, Self::Error> {
-    
     let (remote_addr, local_addr) = value;
-    
+
     match (remote_addr.ip(), local_addr.ip()) {
-      (IpAddr::V4(source_ip), IpAddr::V4(destination_ip)) => {
-        Ok(ProxyHeader::Tcp4(
-          Tcp4Addresses {
-            source_address: source_ip,
-            source_port: remote_addr.port(),
-            destination_address: destination_ip,
-            destination_port: local_addr.port(),
-          }
-        ))
-      }
+      (IpAddr::V4(source_ip), IpAddr::V4(destination_ip)) => Ok(ProxyHeader::Tcp4(Tcp4Addresses {
+        source_address: source_ip,
+        source_port: remote_addr.port(),
+        destination_address: destination_ip,
+        destination_port: local_addr.port(),
+      })),
 
-      (IpAddr::V6(source_ip), IpAddr::V6(destination_ip)) => {
-        Ok(ProxyHeader::Tcp6(
-          Tcp6Addresses {
-            source_address: source_ip,
-            source_port: remote_addr.port(),
-            destination_address: destination_ip,
-            destination_port: local_addr.port(),
-          }
-        ))
-      }
+      (IpAddr::V6(source_ip), IpAddr::V6(destination_ip)) => Ok(ProxyHeader::Tcp6(Tcp6Addresses {
+        source_address: source_ip,
+        source_port: remote_addr.port(),
+        destination_address: destination_ip,
+        destination_port: local_addr.port(),
+      })),
 
-      _ => {
-        Err(FamilyMismatch)
-      }
+      _ => Err(FamilyMismatch),
     }
   }
 }
@@ -143,7 +137,6 @@ impl TryFrom<proxy_header::ProxyHeader<'_>> for ProxyHeader {
     }
   }
 }
-
 
 // impl From<ppp::v1::Header<'_>> for ProxyHeader {
 //   fn from(header: ppp::v1::Header<'_>) -> Self {
@@ -240,20 +233,18 @@ impl Tcp4Addresses {
 impl Tcp6Addresses {
   pub fn source(&self) -> SocketAddr {
     SocketAddr::new(IpAddr::V6(self.source_address), self.source_port)
-  } 
-  
+  }
+
   pub fn destination(&self) -> SocketAddr {
     SocketAddr::new(IpAddr::V6(self.destination_address), self.destination_port)
   }
 }
 
-  
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnixAddresses {
   pub source: [u8; 108],
   pub destination: [u8; 108],
 }
-
 
 // #[derive(Debug, thiserror::Error)]
 // pub enum ParseError {
@@ -290,7 +281,6 @@ impl ParseError {
 }
 
 pub fn parse(buf: &[u8], expect: ExpectProxyProtocol) -> Result<ProxyHeader, ParseError> {
-
   let config = match expect {
     ExpectProxyProtocol::V1 => proxy_header::ParseConfig {
       allow_v1: true,
@@ -315,8 +305,10 @@ pub fn parse(buf: &[u8], expect: ExpectProxyProtocol) -> Result<ProxyHeader, Par
   Ok(header)
 }
 
-pub async fn read<S: AsyncRead + Unpin>(stream: &mut S, expect: ExpectProxyProtocol) -> Result<ProxyHeader, ProxyProtocolError> { 
-  
+pub async fn read<S: AsyncRead + Unpin>(
+  stream: &mut S,
+  expect: ExpectProxyProtocol,
+) -> Result<ProxyHeader, ProxyProtocolError> {
   // 128 is a good upper guess for a proxy header buffer size, it will grow if needed
   let mut buf = Vec::with_capacity(128);
   loop {
@@ -336,7 +328,10 @@ pub async fn read<S: AsyncRead + Unpin>(stream: &mut S, expect: ExpectProxyProto
   }
 }
 
-pub fn encode(header: &ProxyHeader, version: ProxyProtocolVersion) -> Result<Vec<u8>, ProxyProtocolError> {
+pub fn encode(
+  header: &ProxyHeader,
+  version: ProxyProtocolVersion,
+) -> Result<Vec<u8>, ProxyProtocolError> {
   match version {
     ProxyProtocolVersion::V1 => {
       let target = match header {
@@ -363,7 +358,8 @@ pub fn encode(header: &ProxyHeader, version: ProxyProtocolVersion) -> Result<Vec
       // 128 is a good upper guess for a proxy header buffer size, it will grow if needed
       let mut buf = Vec::with_capacity(107);
 
-      target.encode_v1(&mut buf)
+      target
+        .encode_v1(&mut buf)
         .map_err(ProxyProtocolError::Encode)?;
 
       Ok(buf)
@@ -374,27 +370,31 @@ pub fn encode(header: &ProxyHeader, version: ProxyProtocolVersion) -> Result<Vec
         ProxyHeader::Local => proxy_header::ProxyHeader::with_local(),
         ProxyHeader::Unspecified => proxy_header::ProxyHeader::with_local(),
         ProxyHeader::Unix(_) => proxy_header::ProxyHeader::with_local(),
-        ProxyHeader::Tcp4(a) => proxy_header::ProxyHeader::with_address(proxy_header::ProxiedAddress {
-          protocol: proxy_header::Protocol::Stream,
-          source: SocketAddr::new(IpAddr::V4(a.source_address), a.source_port),
-          destination: SocketAddr::new(IpAddr::V4(a.destination_address), a.destination_port),
-        }),
-        ProxyHeader::Tcp6(a) => proxy_header::ProxyHeader::with_address(proxy_header::ProxiedAddress {
-          protocol: proxy_header::Protocol::Stream,
-          source: SocketAddr::new(IpAddr::V6(a.source_address), a.source_port),
-          destination: SocketAddr::new(IpAddr::V6(a.destination_address), a.destination_port),
-        }),
+        ProxyHeader::Tcp4(a) => {
+          proxy_header::ProxyHeader::with_address(proxy_header::ProxiedAddress {
+            protocol: proxy_header::Protocol::Stream,
+            source: SocketAddr::new(IpAddr::V4(a.source_address), a.source_port),
+            destination: SocketAddr::new(IpAddr::V4(a.destination_address), a.destination_port),
+          })
+        }
+        ProxyHeader::Tcp6(a) => {
+          proxy_header::ProxyHeader::with_address(proxy_header::ProxiedAddress {
+            protocol: proxy_header::Protocol::Stream,
+            source: SocketAddr::new(IpAddr::V6(a.source_address), a.source_port),
+            destination: SocketAddr::new(IpAddr::V6(a.destination_address), a.destination_port),
+          })
+        }
       };
 
       let mut buf = Vec::with_capacity(128);
-      target.encode_v2(&mut buf)
+      target
+        .encode_v2(&mut buf)
         .map_err(ProxyProtocolError::Encode)?;
 
       Ok(buf)
     }
   }
-}  
-
+}
 
 #[derive(Clone)]
 pub struct ProxyProtocolConnector {
@@ -403,14 +403,8 @@ pub struct ProxyProtocolConnector {
 }
 
 impl ProxyProtocolConnector {
-  pub fn new(
-    inner: HttpConnector,
-    config: Option<ProxyProtocolConfig>
-  ) -> Self {
-    Self {
-      inner,
-      config,
-    }
+  pub fn new(inner: HttpConnector, config: Option<ProxyProtocolConfig>) -> Self {
+    Self { inner, config }
   }
 }
 
@@ -432,7 +426,9 @@ impl Service<Uri> for ProxyProtocolConnector {
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
 
   fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-    self.inner.poll_ready(cx)
+    self
+      .inner
+      .poll_ready(cx)
       .map_err(ProxyProtocolConnectorError::Inner)
   }
 
@@ -440,26 +436,26 @@ impl Service<Uri> for ProxyProtocolConnector {
     let mut this = self.clone();
 
     async move {
-      
-      let mut stream = this.inner.call(uri).await
+      let mut stream = this
+        .inner
+        .call(uri)
+        .await
         .map_err(ProxyProtocolConnectorError::Inner)?
         .into_inner();
 
       if let Some(config) = &this.config {
         let encoded = crate::proxy_protocol::encode(&config.header, config.version)
           .map_err(ProxyProtocolConnectorError::ProxyHeaderEncode)?;
-      
-        tokio_util::time::FutureExt::timeout(
-          stream.write_all(&encoded),
-          config.timeout
-        )
-        .await
-        .map_err(|_| ProxyProtocolConnectorError::ProxyHeaderWriteTimeout)?
-        .map_err(ProxyProtocolConnectorError::ProxyHeaderWrite)?;
+
+        tokio_util::time::FutureExt::timeout(stream.write_all(&encoded), config.timeout)
+          .await
+          .map_err(|_| ProxyProtocolConnectorError::ProxyHeaderWriteTimeout)?
+          .map_err(ProxyProtocolConnectorError::ProxyHeaderWrite)?;
       }
-      
+
       Ok(TokioIo::new(stream))
-    }.boxed()
+    }
+    .boxed()
   }
 }
 
@@ -478,18 +474,14 @@ mod test {
       destination_address: Ipv4Addr::new(192, 168, 0, 1),
       destination_port: 443,
     });
-    
+
     let mut io = Cursor::new(buffer);
-    let header = read(&mut io, ExpectProxyProtocol::V1)
-      .await
-      .unwrap();
+    let header = read(&mut io, ExpectProxyProtocol::V1).await.unwrap();
 
     assert_eq!(header, target);
-    
+
     let mut post = String::new();
-    io.read_to_string(&mut post)
-      .await
-      .unwrap();
+    io.read_to_string(&mut post).await.unwrap();
 
     assert_eq!(post, "12345678");
   }
@@ -501,20 +493,16 @@ mod test {
       source_address: Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xffff),
       source_port: 12345,
       destination_address: Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xffff, 0xffff),
-      destination_port: 443, 
+      destination_port: 443,
     });
 
     let mut io = Cursor::new(buffer);
-    let header = read(&mut io, ExpectProxyProtocol::V1)
-      .await
-      .unwrap();
+    let header = read(&mut io, ExpectProxyProtocol::V1).await.unwrap();
 
     assert_eq!(header, target);
-    
+
     let mut post = String::new();
-    io.read_to_string(&mut post)
-      .await
-      .unwrap();
+    io.read_to_string(&mut post).await.unwrap();
 
     assert_eq!(post, "12345678");
   }
@@ -530,16 +518,12 @@ mod test {
     });
 
     let mut io = Cursor::new(buffer);
-    let header = read(&mut io, ExpectProxyProtocol::Any)
-      .await
-      .unwrap();
+    let header = read(&mut io, ExpectProxyProtocol::Any).await.unwrap();
 
     assert_eq!(header, target);
 
     let mut post = String::new();
-    io.read_to_string(&mut post)
-      .await
-      .unwrap();
+    io.read_to_string(&mut post).await.unwrap();
 
     assert_eq!(post, "12345678");
   }
@@ -551,20 +535,16 @@ mod test {
       source_address: Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0xffff),
       source_port: 12345,
       destination_address: Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xffff, 0xffff),
-      destination_port: 443, 
+      destination_port: 443,
     });
 
     let mut io = Cursor::new(buffer);
-    let header = read(&mut io, ExpectProxyProtocol::Any)
-      .await
-      .unwrap();
+    let header = read(&mut io, ExpectProxyProtocol::Any).await.unwrap();
 
     assert_eq!(header, target);
 
     let mut post = String::new();
-    io.read_to_string(&mut post)
-      .await
-      .unwrap();
+    io.read_to_string(&mut post).await.unwrap();
 
     assert_eq!(post, "12345678");
   }
@@ -574,18 +554,14 @@ mod test {
     let buffer = String::from("PROXY UNKNOWN\r\n12345678");
     let target = ProxyHeader::Unknown;
     let mut io = Cursor::new(buffer);
-    let header = read(&mut io, ExpectProxyProtocol::V1)
-      .await
-      .unwrap();
+    let header = read(&mut io, ExpectProxyProtocol::V1).await.unwrap();
 
     assert_eq!(header, target);
     assert!(header.source_addr().is_none());
     assert!(header.destination_addr().is_none());
-    
+
     let mut post = String::new();
-    io.read_to_string(&mut post)
-      .await
-      .unwrap();
+    io.read_to_string(&mut post).await.unwrap();
 
     assert_eq!(post, "12345678");
   }
@@ -595,22 +571,17 @@ mod test {
     let buffer = String::from("PROXY UNKNOWN\r\n12345678");
     let target = ProxyHeader::Unknown;
     let mut io = Cursor::new(buffer);
-    let header = read(&mut io, ExpectProxyProtocol::Any)
-      .await
-      .unwrap();
+    let header = read(&mut io, ExpectProxyProtocol::Any).await.unwrap();
 
     assert_eq!(header, target);
     assert!(header.source_addr().is_none());
     assert!(header.destination_addr().is_none());
 
     let mut post = String::new();
-    io.read_to_string(&mut post)
-      .await
-      .unwrap();
+    io.read_to_string(&mut post).await.unwrap();
 
     assert_eq!(post, "12345678");
   }
-
 
   #[test]
   pub fn encode_v1_ipv4() {
@@ -620,9 +591,8 @@ mod test {
       destination_address: Ipv4Addr::new(192, 168, 0, 1),
       destination_port: 443,
     });
-    
-    let buf = encode(&header, ProxyProtocolVersion::V1)
-      .unwrap();
+
+    let buf = encode(&header, ProxyProtocolVersion::V1).unwrap();
 
     assert_eq!(buf, b"PROXY TCP4 127.0.0.1 192.168.0.1 12345 443\r\n");
   }
@@ -636,8 +606,7 @@ mod test {
       destination_port: 443,
     });
 
-    let buf = encode(&header, ProxyProtocolVersion::V1)
-      .unwrap();
+    let buf = encode(&header, ProxyProtocolVersion::V1).unwrap();
 
     assert_eq!(buf, b"PROXY TCP6 ::ffff ::ffff:ffff 12345 443\r\n");
   }
@@ -646,11 +615,7 @@ mod test {
   pub fn issue_repr() {
     use proxy_header::ProxyHeader;
 
-    let bufs = [
-      "PROXY UNK",
-      "PROXY TCP4",
-      "PROXY TCP6"
-    ];
+    let bufs = ["PROXY UNK", "PROXY TCP4", "PROXY TCP6"];
     let config = proxy_header::ParseConfig {
       allow_v1: true,
       allow_v2: true,
@@ -658,8 +623,7 @@ mod test {
     };
 
     for buf in bufs {
-      let err = ProxyHeader::parse(buf.as_bytes(), config)
-      .unwrap_err();
+      let err = ProxyHeader::parse(buf.as_bytes(), config).unwrap_err();
 
       // this fails with Error::Invalid instead of Error::BufferTooShort
       assert!(

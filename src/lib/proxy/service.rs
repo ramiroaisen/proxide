@@ -51,7 +51,7 @@ use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
 use crate::serde::header_value::SHeaderValue;
-use crate::service::{AddrService, Connection, StreamService};
+use crate::service::{Connection, StreamService};
 #[cfg(feature = "stats")]
 use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
@@ -1605,18 +1605,55 @@ async fn copy<A: AsyncRead + AsyncWrite + Unpin, B: AsyncRead + AsyncWrite + Unp
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct ProxyHttpService {
-  inner: ProxyServiceInner,
-  remote_addr: SocketAddr,
-  proxy_header: Option<ProxyHeader>,
+pub trait MakeHttpService {
+  type Service: Service<Request<Incoming>>;
+  fn make_service(
+    &self,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    ssl: bool,
+    proxy_header: Option<ProxyHeader>,
+  ) -> Self::Service;
 }
 
-impl Deref for ProxyHttpService {
-  type Target = ProxyServiceInner;
-  fn deref(&self) -> &Self::Target {
-    &self.inner
+#[derive(Debug, Clone)]
+pub struct HttpMakeService {
+  config: Arc<Config>,
+}
+
+impl HttpMakeService {
+  pub fn new(config: Arc<Config>) -> Self {
+    Self { config }
   }
+}
+
+impl MakeHttpService for HttpMakeService {
+  type Service = HttpService;
+
+  fn make_service(
+    &self,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+    ssl: bool,
+    proxy_header: Option<ProxyHeader>,
+  ) -> Self::Service {
+    HttpService::new(
+      self.config.clone(),
+      local_addr,
+      remote_addr,
+      ssl,
+      proxy_header,
+    )
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpService {
+  config: Arc<Config>,
+  local_addr: SocketAddr,
+  remote_addr: SocketAddr,
+  ssl: bool,
+  proxy_header: Option<ProxyHeader>,
 }
 
 #[derive(Debug, Clone)]
@@ -1626,40 +1663,41 @@ pub struct ProxyServiceInner {
   pub ssl: bool,
 }
 
-impl ProxyHttpService {
+impl HttpService {
   pub fn new(
-    inner: ProxyServiceInner,
+    config: Arc<Config>,
+    local_addr: SocketAddr,
     remote_addr: SocketAddr,
+    ssl: bool,
     proxy_header: Option<ProxyHeader>,
   ) -> Self {
     Self {
-      inner,
+      config,
+      local_addr,
       remote_addr,
+      ssl,
       proxy_header,
     }
   }
 }
 
-impl Service<Request<Incoming>> for ProxyHttpService {
+impl Service<Request<Incoming>> for HttpService {
   type Response = Response<Body>;
   type Error = Infallible;
   type Future = ServiceFuture<Result<Self::Response, Self::Error>>;
 
   fn call(&self, req: Request<Incoming>) -> Self::Future {
-    let me = self.clone();
+    let Self {
+      config,
+      local_addr,
+      remote_addr,
+      ssl,
+      proxy_header,
+    } = self.clone();
     // we spawn here to avoid cancellation
-    // this has almost no impact on performance and help to the predictability of the service as it avoids cancellations
+    // this has almost no impact on performance and help to the predictability of the service as it avoids it being cancelled in-flight
     let handle = tokio::spawn(async move {
-      match serve_proxy(
-        req,
-        &me.config,
-        me.addr,
-        me.remote_addr,
-        me.proxy_header.clone(),
-        me.ssl,
-      )
-      .await
-      {
+      match serve_proxy(req, &config, local_addr, remote_addr, proxy_header, ssl).await {
         Ok(response) => Ok(response),
         Err(e) => {
           log::warn!("proxy ended with error: {e}");
@@ -1727,21 +1765,5 @@ impl<O> Future for ServiceFuture<O> {
       Poll::Ready(o) => Poll::Ready(o.unwrap()),
       Poll::Pending => Poll::Pending,
     }
-  }
-}
-
-pub struct ProxyAddrService {
-  inner: ProxyServiceInner,
-}
-
-impl ProxyAddrService {
-  pub fn new(inner: ProxyServiceInner) -> Self {
-    Self { inner }
-  }
-}
-
-impl AddrService<ProxyHttpService> for ProxyAddrService {
-  fn make_service(&self, addr: SocketAddr, proxy_header: Option<ProxyHeader>) -> ProxyHttpService {
-    ProxyHttpService::new(self.inner.clone(), addr, proxy_header)
   }
 }

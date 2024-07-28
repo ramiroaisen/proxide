@@ -600,27 +600,24 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
   let mut handles = Vec::<tokio::task::JoinHandle<()>>::new();
 
   // bind to al http addresss
-  for (addr, expect_proxy_protocol) in http_bind {
-    log::info!("binding in http mode at {addr}");
-    let tcp = bind(addr).with_context(|| format!("error binding in http mode at addr {addr}"))?;
+  for (local_addr, expect_proxy_protocol) in http_bind {
+    log::info!("binding in http mode at {local_addr}");
+    let tcp = bind(local_addr)
+      .with_context(|| format!("error binding in http mode at addr {local_addr}"))?;
 
-    let service_inner = proxy::service::ProxyServiceInner {
-      config: config.clone(),
-      addr,
-      ssl: false,
-    };
-
-    let addr_service = proxy::service::ProxyAddrService::new(service_inner);
+    let make_service = proxy::service::HttpMakeService::new(config.clone());
 
     let handle = tokio::spawn({
       let signal = cancel_token.clone().cancelled_owned();
       let mut wait_start = start.subscribe();
       async move {
         if let Ok(()) = wait_start.changed().await {
-          log::info!("starting http server at {}", addr);
+          log::info!("starting http server at {}", local_addr);
+
           serve_http(
+            local_addr,
             tcp,
-            addr_service,
+            make_service,
             signal,
             http_server_read_timeout,
             http_server_write_timeout,
@@ -630,7 +627,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           )
           .await;
         }
-        log::info!("http server at {} stopped", addr);
+        log::info!("http server at {} stopped", local_addr);
       }
     });
 
@@ -638,9 +635,10 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
   }
 
   // bind to all https addresses
-  for (addr, (expect_proxy_protocol, sni)) in https_bind {
-    log::info!("binding in https mode at {addr}");
-    let tcp = bind(addr).with_context(|| format!("error binding in https mode at addr {addr}"))?;
+  for (local_addr, (expect_proxy_protocol, sni)) in https_bind {
+    log::info!("binding in https mode at {local_addr}");
+    let tcp = bind(local_addr)
+      .with_context(|| format!("error binding in https mode at addr {local_addr}"))?;
 
     let mut cert_resolver = CertResolver::new();
     if let Some((_, key)) = sni.first() {
@@ -655,7 +653,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
     let mut server_config = rustls::ServerConfig::builder_with_provider(crypto_provider)
       .with_protocol_versions(&[&TLS12, &TLS13])
-      .with_context(|| format!("error building server config for addr {addr}"))?
+      .with_context(|| format!("error building server config for addr {local_addr}"))?
       .with_no_client_auth()
       .with_cert_resolver(Arc::new(cert_resolver));
 
@@ -663,24 +661,19 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
     let server_config = Arc::new(server_config);
 
-    let service_inner = proxy::service::ProxyServiceInner {
-      config: config.clone(),
-      addr,
-      ssl: true,
-    };
-
-    let addr_service = proxy::service::ProxyAddrService::new(service_inner);
+    let make_service = proxy::service::HttpMakeService::new(config.clone());
 
     let handle = tokio::spawn({
       let signal = cancel_token.clone().cancelled_owned();
       let mut wait_start = start.subscribe();
       async move {
         if let Ok(()) = wait_start.changed().await {
-          log::info!("starting https server at {}", addr);
+          log::info!("starting https server at {}", local_addr);
           serve_https(
+            local_addr,
             tcp,
             server_config,
-            addr_service,
+            make_service,
             signal,
             http_server_read_timeout,
             http_server_write_timeout,
@@ -689,7 +682,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
             http_proxy_protocol_read_timeout,
           )
           .await;
-          log::info!("https server at {} stopped", addr);
+          log::info!("https server at {} stopped", local_addr);
         }
       }
     });
