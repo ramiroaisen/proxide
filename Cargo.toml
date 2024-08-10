@@ -24,8 +24,10 @@ full = [
   "client-log",
   "interpolation",
   "compression-all-algos",
+  "serve-static",
   # "stats",
 ]
+serve-static = []
 stats = []
 human-panic = ["dep:human-panic"]
 proctitle = ["dep:proctitle"]
@@ -108,6 +110,7 @@ rustls-pki-types = { version = "1.7.0", features = ["std"] }
 async-tungstenite = { version = "0.27.0", features = ["tokio", "tokio-runtime"] }
 const-str = "0.5.7"
 rustls-native-certs = "0.7.1"
+unwrap-infallible = "0.1.5"
 
 [dev-dependencies]
 local-ip-address = "0.6.1"

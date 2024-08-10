@@ -10,6 +10,14 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
+#[cfg(feature = "serve-static")]
+use std::mem::MaybeUninit;
+#[cfg(feature = "serve-static")]
+use tokio::io::AsyncRead;
+
+#[cfg(feature = "serve-static")]
+const FILE_READ_BUF_SIZE: usize = 1024 * 64;
+
 use crate::proxy::error::ProxyHttpError;
 
 type FrameStream =
@@ -21,6 +29,8 @@ pub enum BodyKind {
   Full(Option<Bytes>),
   Incoming(#[pin] Incoming),
   Stream(FrameStream),
+  #[cfg(feature = "serve-static")]
+  File(#[pin] tokio::fs::File),
 }
 
 #[pin_project(PinnedDrop)]
@@ -70,6 +80,14 @@ impl Body {
     }
   }
 
+  #[cfg(feature = "serve-static")]
+  pub fn file(file: tokio::fs::File) -> Self {
+    Self {
+      kind: BodyKind::File(file),
+      on_drop: vec![],
+    }
+  }
+
   pub fn channel() -> (Self, spsc::Sender<Result<Frame<Bytes>, ProxyHttpError>>) {
     let (kind, sender) = BodyKind::channel();
     let body = Self {
@@ -104,6 +122,12 @@ impl BodyKind {
     Self::Stream(Box::pin(stream))
   }
 
+  #[cfg(feature = "serve-static")]
+  pub fn file(file: tokio::fs::File) -> Self {
+    #[cfg(feature = "serve-static")]
+    Self::File(file)
+  }
+
   // kanal channel is not Sync
   pub fn channel() -> (Self, spsc::Sender<Result<Frame<Bytes>, ProxyHttpError>>) {
     let (sender, receiver) = spsc::channel();
@@ -133,6 +157,24 @@ impl HyperBody for BodyKind {
         Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProxyHttpError::IncomingBody(e)))),
       },
       BodyKindProjection::Stream(stream) => stream.as_mut().poll_next(cx),
+      #[cfg(feature = "serve-static")]
+      BodyKindProjection::File(file) => {
+        let mut buf = [const { MaybeUninit::<u8>::uninit() }; FILE_READ_BUF_SIZE];
+        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf[..]);
+        match std::task::ready!(file.poll_read(cx, &mut read_buf)) {
+          Ok(()) => {
+            if read_buf.filled().is_empty() {
+              return Poll::Ready(None);
+            }
+
+            Poll::Ready(Some(Ok(Frame::data(Bytes::copy_from_slice(
+              read_buf.filled(),
+            )))))
+          }
+
+          Err(e) => Poll::Ready(Some(Err(ProxyHttpError::FileRead(e)))),
+        }
+      }
     }
   }
 
@@ -143,6 +185,8 @@ impl HyperBody for BodyKind {
       BodyKind::Incoming(incoming) => incoming.is_end_stream(),
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not trusted to be correct
       BodyKind::Stream(_) => false,
+      #[cfg(feature = "serve-static")]
+      BodyKind::File(_) => false,
     }
   }
 
@@ -156,6 +200,8 @@ impl HyperBody for BodyKind {
       BodyKind::Incoming(incoming) => incoming.size_hint(),
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not trusted to be correct
       BodyKind::Stream(_) => SizeHint::default(),
+      #[cfg(feature = "serve-static")]
+      BodyKind::File(_) => SizeHint::default(),
     }
   }
 }
@@ -164,20 +210,7 @@ impl Stream for BodyKind {
   type Item = Result<Frame<Bytes>, ProxyHttpError>;
 
   fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-    match self.project() {
-      BodyKindProjection::Empty => Poll::Ready(None),
-      BodyKindProjection::Full(opt) => match opt.take() {
-        None => Poll::Ready(None),
-        Some(data) => Poll::Ready(Some(Ok(Frame::data(data)))),
-      },
-      BodyKindProjection::Incoming(mut incoming) => match incoming.as_mut().poll_frame(cx) {
-        Poll::Pending => Poll::Pending,
-        Poll::Ready(None) => Poll::Ready(None),
-        Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
-        Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProxyHttpError::IncomingBody(e)))),
-      },
-      BodyKindProjection::Stream(stream) => stream.as_mut().poll_next(cx),
-    }
+    self.poll_frame(cx)
   }
 
   fn size_hint(&self) -> (usize, Option<usize>) {
@@ -196,6 +229,8 @@ impl Stream for BodyKind {
         }
       }
       BodyKind::Stream(stream) => stream.size_hint(),
+      #[cfg(feature = "serve-static")]
+      BodyKind::File(_) => (0, None),
     }
   }
 }

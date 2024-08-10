@@ -782,6 +782,8 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
         HttpHandle::Return { .. } => {}
         HttpHandle::HeapProfile { .. } => {}
         HttpHandle::Stats { .. } => {}
+        #[cfg(feature = "serve-static")]
+        HttpHandle::Static { .. } => {}
         HttpHandle::Proxy { upstream, .. } => {
           for upstream in upstream.iter() {
             let key = Key::from_config(config, app, upstream).with_context(|| {
