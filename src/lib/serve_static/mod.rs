@@ -2,7 +2,7 @@ use headers::{
   ContentType, HeaderMapExt, IfModifiedSince, IfRange, IfUnmodifiedSince, LastModified, Range,
 };
 use http::HeaderMap;
-use std::{ops::Bound, os::unix::fs::MetadataExt, path::PathBuf, str::FromStr};
+use std::{ops::Bound, path::PathBuf, str::FromStr};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -249,7 +249,7 @@ pub async fn resolve(
           }
         };
 
-        let mut ranges_iter = ranges.satisfiable_ranges(metadata.size());
+        let mut ranges_iter = ranges.satisfiable_ranges(metadata.len());
 
         match ranges_iter.next() {
           // no satisfiable range
