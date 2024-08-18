@@ -1,19 +1,22 @@
 use crate::channel::spsc;
 use bytes::Bytes;
-use bytes::BytesMut;
 use futures::Stream;
 use http_body::Frame;
 use http_body::SizeHint;
 use hyper::body::Body as HyperBody;
 use hyper::body::Incoming;
 use pin_project::{pin_project, pinned_drop};
-use std::io::Read;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
 #[cfg(feature = "serve-static")]
-const FILE_READ_BUF_SIZE: usize = 1024 * 4;
+use bytes::BytesMut;
+#[cfg(feature = "serve-static")]
+use std::io::Read;
+
+#[cfg(feature = "serve-static")]
+const READ_BUF_SIZE: usize = 1024 * 4;
 
 use crate::proxy::error::ProxyHttpError;
 
@@ -27,7 +30,7 @@ pub enum BodyKind {
   Incoming(#[pin] Incoming),
   Stream(FrameStream),
   #[cfg(feature = "serve-static")]
-  File(std::io::BufReader<std::fs::File>),
+  Read(Box<dyn std::io::Read + Send + Sync + 'static>),
 }
 
 #[pin_project(PinnedDrop)]
@@ -78,9 +81,9 @@ impl Body {
   }
 
   #[cfg(feature = "serve-static")]
-  pub fn file(file: std::fs::File) -> Self {
+  pub fn read<R: Into<Box<dyn std::io::Read + Send + Sync + 'static>>>(read: R) -> Self {
     Self {
-      kind: BodyKind::File(std::io::BufReader::new(file)),
+      kind: BodyKind::read(read),
       on_drop: vec![],
     }
   }
@@ -120,9 +123,9 @@ impl BodyKind {
   }
 
   #[cfg(feature = "serve-static")]
-  pub fn file(file: std::fs::File) -> Self {
+  pub fn read<R: Into<Box<dyn std::io::Read + Send + Sync + 'static>>>(read: R) -> Self {
     #[cfg(feature = "serve-static")]
-    Self::File(std::io::BufReader::new(file))
+    Self::Read(read.into())
   }
 
   // kanal channel is not Sync
@@ -155,11 +158,11 @@ impl HyperBody for BodyKind {
       },
       BodyKindProjection::Stream(stream) => stream.as_mut().poll_next(cx),
       #[cfg(feature = "serve-static")]
-      BodyKindProjection::File(file) => {
+      BodyKindProjection::Read(read) => {
         // let mut buf = [const { MaybeUninit::<u8>::uninit() }; FILE_READ_BUF_SIZE];
         // let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf[..]);
-        let mut buf = BytesMut::zeroed(FILE_READ_BUF_SIZE);
-        match file.read(&mut buf) {
+        let mut buf = BytesMut::zeroed(READ_BUF_SIZE);
+        match read.read(&mut buf) {
           Ok(0) => Poll::Ready(None),
           Ok(n) => {
             buf.truncate(n);
@@ -179,7 +182,7 @@ impl HyperBody for BodyKind {
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not be trusted to be correct
       BodyKind::Stream(_) => false,
       #[cfg(feature = "serve-static")]
-      BodyKind::File(_) => false,
+      BodyKind::Read(_) => false,
     }
   }
 
@@ -194,7 +197,7 @@ impl HyperBody for BodyKind {
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not trusted to be correct
       BodyKind::Stream(_) => SizeHint::default(),
       #[cfg(feature = "serve-static")]
-      BodyKind::File(_) => SizeHint::default(),
+      BodyKind::Read(_) => SizeHint::default(),
     }
   }
 }
@@ -223,7 +226,7 @@ impl Stream for BodyKind {
       }
       BodyKind::Stream(stream) => stream.size_hint(),
       #[cfg(feature = "serve-static")]
-      BodyKind::File(_) => (0, None),
+      BodyKind::Read(_) => (0, None),
     }
   }
 }

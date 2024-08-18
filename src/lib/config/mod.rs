@@ -36,6 +36,7 @@ use crate::serde::url::{HttpUpstreamBaseUrl, StreamUpstreamOrigin};
 
 #[allow(unused)]
 use crate::serde::content_type::ContentTypeMatcher;
+#[cfg(feature = "serve-static")]
 use crate::serve_static::DotFiles;
 
 pub mod listen;

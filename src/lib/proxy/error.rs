@@ -83,6 +83,10 @@ pub enum ProxyHttpError {
   #[error("method not allowed, allowed method are OPTIONS, GET and HEAD")]
   StaticMethodNotAllowed,
 
+  #[cfg(feature = "serve-static")]
+  #[error("file seek error: {0}")]
+  FileSeek(#[source] std::io::Error),
+
   #[error("client error: {message}")]
   Client {
     kind: ClientErrorKind,
@@ -130,7 +134,10 @@ impl ProxyHttpError {
       // TODO: do this properly
       #[cfg(feature = "serve-static")]
       E::ResolveStatic(_) => ErrorOriginator::User,
+      #[cfg(feature = "serve-static")]
       E::StaticMethodNotAllowed => ErrorOriginator::User,
+      #[cfg(feature = "serve-static")]
+      E::FileSeek(_) => ErrorOriginator::Internal,
     }
   }
 
@@ -172,7 +179,11 @@ impl ProxyHttpError {
       E::Client { kind, .. } => kind.status(),
 
       // TODO: add Allow header
+      #[cfg(feature = "serve-static")]
       E::StaticMethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+
+      #[cfg(feature = "serve-static")]
+      E::FileSeek(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
   }
 }

@@ -855,6 +855,8 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           match handle {
             HttpHandle::Return { .. } => {}
             HttpHandle::HeapProfile { .. } => {}
+            #[cfg(feature = "serve-static")]
+            HttpHandle::Static { .. } => {}
             HttpHandle::Stats { .. } => {}
             HttpHandle::Proxy {
               upstream,

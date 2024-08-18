@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+  apps: 
+    - listen:
+        - addr: 15300
+      when: 
+        - match: 
+            header: { exact: [ x-dot-files, allow ] }
+          static:
+            base_dir: ./tests/static
+            index_files: [ index.html, index.txt ]
+            dot_files: allow
+            response_headers:
+              - [ x-test, static ]
+      
+        - match:
+            header: { exact: [ x-dot-files, error ] }
+          static:
+            base_dir: ./tests/static
+            index_files: [ index.html, index.txt ]
+            dot_files: error
+            response_headers:
+              - [ x-test, static ]
+
+        - match:
+            header: { exact: [ x-dot-files, ignore ] }
+          static:
+            base_dir: ./tests/static
+            index_files: [ index.html, index.txt ]
+            response_headers:
+              - [ x-test, static ]
+
+        - match: all
+          static:
+            base_dir: ./tests/static
+            index_files: [ index.html, index.txt ]
+            response_headers:
+              - [ x-test, static ]

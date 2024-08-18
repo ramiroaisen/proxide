@@ -1,8 +1,8 @@
 use headers::{
-  ContentLength, ContentType, HeaderMapExt, IfModifiedSince, IfUnmodifiedSince, LastModified,
+  ContentType, HeaderMapExt, IfModifiedSince, IfRange, IfUnmodifiedSince, LastModified, Range,
 };
 use http::HeaderMap;
-use std::{os::unix::fs::MetadataExt, path::PathBuf, str::FromStr};
+use std::{ops::Bound, os::unix::fs::MetadataExt, path::PathBuf, str::FromStr};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -11,10 +11,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug)]
 pub enum Resolved {
   AppendSlash,
-  NotModfied,
+  NotModified,
   UnmodifiedPreconditionFailed,
+  RangeNotSatisfiable,
   Serve {
     file: std::fs::File,
+    range: Option<(Bound<u64>, Bound<u64>)>,
     path: PathBuf,
     metadata: std::fs::Metadata,
     headers: hyper::HeaderMap,
@@ -74,7 +76,6 @@ impl ServeStaticError {
       E::PathComponentCurDir => false,
       E::PathComponentParentDir => false,
       E::PathComponentEmpty => false,
-      E::DotFilesIgnored => false,
       E::DotFilesError => false,
       E::Directory => false,
       E::IndexFileDirectory => false,
@@ -82,6 +83,8 @@ impl ServeStaticError {
       E::IndexFileNotAFile => false,
       E::OutsideBase => false,
       E::IndexFileOutsideBase => false,
+      E::DotFilesIgnored => true,
+
       E::CanonicalizeBase(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::CanonicalizeTarget(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::IndexFileCanonicalizeTarget(e) => e.kind() == std::io::ErrorKind::NotFound,
@@ -113,13 +116,11 @@ pub enum DotFiles {
 pub async fn resolve(
   base_dir: &str,
   path: &str,
-  headers: &hyper::HeaderMap,
+  request_headers: &hyper::HeaderMap,
   options: ServeStaticOptions<'_>,
 ) -> Result<Resolved, ServeStaticError> {
   // remove leading slash
   let base = std::fs::canonicalize(base_dir).map_err(ServeStaticError::CanonicalizeBase)?;
-
-  // dbg!(&base, path);
 
   let mut target = if path.is_empty() {
     base.clone()
@@ -166,76 +167,109 @@ pub async fn resolve(
 
   let mut metadata = std::fs::metadata(&target).map_err(ServeStaticError::Metadata)?;
 
-  let mut file_type = metadata.file_type();
+  let file: std::fs::File;
 
-  let mut is_index_file = false;
+  'resolve: {
+    if metadata.is_dir() {
+      for index_file in options.index_files {
+        let index_target = match std::fs::canonicalize(target.join(index_file)) {
+          Ok(index_target) => index_target,
+          Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+              continue;
+            }
+            return Err(ServeStaticError::IndexFileCanonicalizeTarget(e));
+          }
+        };
 
-  if file_type.is_dir() {
-    if options.index_files.is_empty() {
+        if !index_target.starts_with(base) {
+          return Err(ServeStaticError::IndexFileOutsideBase);
+        }
+
+        let index_metadata =
+          std::fs::metadata(&index_target).map_err(ServeStaticError::Metadata)?;
+
+        if !index_metadata.is_file() {
+          return Err(ServeStaticError::IndexFileNotAFile);
+        }
+
+        if !path.is_empty() && !path.ends_with('/') {
+          return Ok(Resolved::AppendSlash);
+        }
+
+        file = std::fs::OpenOptions::new()
+          .read(true)
+          .open(&index_target)
+          .map_err(ServeStaticError::IndexFileOpen)?;
+        target = index_target;
+        metadata = index_metadata;
+
+        break 'resolve;
+      }
+
       return Err(ServeStaticError::Directory);
-    }
-
-    for index_file in options.index_files {
-      target.push(index_file);
-
-      target =
-        std::fs::canonicalize(target).map_err(ServeStaticError::IndexFileCanonicalizeTarget)?;
-
-      if !target.starts_with(&base) {
-        return Err(ServeStaticError::IndexFileOutsideBase);
-      }
-
-      metadata = std::fs::metadata(&target).map_err(ServeStaticError::IndexFileMetadata)?;
-
-      if !metadata.is_file() {
-        continue;
-      }
-
-      if !path.is_empty() && !path.ends_with('/') {
-        return Ok(Resolved::AppendSlash);
-      }
-
-      file_type = metadata.file_type();
-      is_index_file = true;
-    }
-  }
-
-  // dbg!(&metadata);
-
-  if !file_type.is_file() {
-    if file_type.is_dir() {
-      if !is_index_file {
-        return Err(ServeStaticError::Directory);
-      } else {
-        return Err(ServeStaticError::IndexFileDirectory);
-      }
-    }
-
-    if !is_index_file {
-      return Err(ServeStaticError::NotAFile);
     } else {
-      return Err(ServeStaticError::IndexFileNotAFile);
+      if !metadata.is_file() {
+        return Err(ServeStaticError::NotAFile);
+      }
+
+      file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&target)
+        .map_err(ServeStaticError::Open)?;
     }
   }
 
   if let Ok(meta_modified) = metadata.modified() {
-    if let Some(if_modified_since) = headers.typed_get::<IfModifiedSince>() {
+    if let Some(if_modified_since) = request_headers.typed_get::<IfModifiedSince>() {
       if !if_modified_since.is_modified(meta_modified) {
-        return Ok(Resolved::NotModfied);
+        return Ok(Resolved::NotModified);
       }
     }
 
-    if let Some(if_unmodified_since) = headers.typed_get::<IfUnmodifiedSince>() {
+    if let Some(if_unmodified_since) = request_headers.typed_get::<IfUnmodifiedSince>() {
       if !if_unmodified_since.precondition_passes(meta_modified) {
         return Ok(Resolved::UnmodifiedPreconditionFailed);
       }
     }
   }
 
-  let mut headers = HeaderMap::new();
+  let range = 'range: {
+    match (
+      request_headers.typed_get::<Range>(),
+      request_headers.typed_get::<IfRange>(),
+      metadata.modified(),
+    ) {
+      (None, _, _) => break 'range None,
+      (Some(ranges), if_range, last_modified_time) => {
+        if let Some(if_range) = if_range {
+          let last_modified = last_modified_time.ok().map(LastModified::from);
+          if if_range.is_modified(None, last_modified.as_ref()) {
+            break 'range None;
+          }
+        };
 
-  // content length
-  headers.typed_insert(ContentLength(metadata.size()));
+        let mut ranges_iter = ranges.satisfiable_ranges(metadata.size());
+
+        match ranges_iter.next() {
+          // no satisfiable range
+          None => return Ok(Resolved::RangeNotSatisfiable),
+
+          Some(range) => {
+            // more than 1 range (multipart ranges) is not supported
+            let next = ranges_iter.next();
+            if next.is_some() {
+              return Ok(Resolved::RangeNotSatisfiable);
+            }
+
+            break 'range Some(range);
+          }
+        }
+      }
+    }
+  };
+
+  let mut headers = HeaderMap::new();
 
   // content type
   let mime = mime_guess::from_path(&target).first();
@@ -249,19 +283,9 @@ pub async fn resolve(
     headers.typed_insert(LastModified::from(meta_modified));
   }
 
-  let file = std::fs::OpenOptions::new()
-    .read(true)
-    .open(&target)
-    .map_err(|e| {
-      if is_index_file {
-        ServeStaticError::IndexFileOpen(e)
-      } else {
-        ServeStaticError::Open(e)
-      }
-    })?;
-
   let resolved = Resolved::Serve {
     path: target,
+    range,
     headers,
     metadata,
     file,

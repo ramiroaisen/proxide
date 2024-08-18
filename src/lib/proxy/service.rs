@@ -1,6 +1,8 @@
 #![allow(clippy::declare_interior_mutable_const)] // silence const headers warning
 #![allow(non_camel_case_types)] // silence #[dynamic] warning
 #![allow(non_upper_case_globals)] // silence #[dynamic] warning
+use headers::{AcceptRanges, ContentLength, ContentRange, HeaderMapExt};
+use http::header::ALLOW;
 use http::Uri;
 use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderName, HeaderValue, CONNECTION, CONTENT_TYPE, HOST, SERVER};
@@ -17,6 +19,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{convert::Infallible, pin::Pin, sync::Arc};
+#[cfg(feature = "serve-static")]
+use std::{
+  io::{Read, Seek},
+  ops::Bound,
+};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
@@ -33,7 +40,6 @@ use crate::body::{map_request_body, Body};
 use crate::client::pool::ProxyProtocolConfig;
 use crate::client::send_request;
 use crate::config::defaults::{
-  DEFAULT_COMPRESSION, DEFAULT_COMPRESSION_CONTENT_TYPES, DEFAULT_COMPRESSION_MIN_SIZE,
   DEFAULT_HTTP_BALANCE, DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_RETRIES,
   DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_HTTP_RETRY_BACKOFF,
   DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY, DEFAULT_STREAM_BALANCE,
@@ -41,6 +47,7 @@ use crate::config::defaults::{
   DEFAULT_STREAM_PROXY_WRITE_TIMEOUT, DEFAULT_STREAM_RETRY_BACKOFF,
   DEFAULT_STREAM_SERVER_READ_TIMEOUT, DEFAULT_STREAM_SERVER_WRITE_TIMEOUT,
 };
+
 use crate::config::matcher::RequestInfo;
 use crate::config::{
   Balance, Config, HttpApp, HttpHandle, HttpUpstream, ProxyHeaders, ResponseHeaders, StreamHandle,
@@ -115,18 +122,18 @@ pub fn resolve_upstream_app<'a>(
   feature = "compression-deflate"
 ))]
 fn compress(
-  app_compression: &[crate::config::Compress],
-  app_compression_content_types: &[ContentTypeMatcher],
-  app_compression_min_size: u64,
+  compression: &[crate::config::Compress],
+  compression_content_types: &[ContentTypeMatcher],
+  compression_min_size: u64,
   accept_encoding: Option<&HeaderValue>,
   status: StatusCode,
   upstream_body: Body,
   upstream_headers: hyper::HeaderMap,
 ) -> (Body, hyper::HeaderMap) {
   if let Some(selected) = crate::compression::should_compress(
-    app_compression,
-    app_compression_content_types,
-    app_compression_min_size,
+    compression,
+    compression_content_types,
+    compression_min_size,
     accept_encoding,
     status,
     upstream_body.size_hint(),
@@ -324,6 +331,9 @@ pub async fn serve_proxy(
             response = Response::new(Body::empty());
             // we prefer OK over NO_CONTENT as some browsers doesn't handle it very well
             *response.status_mut() = StatusCode::OK;
+            response
+              .headers_mut()
+              .insert(ALLOW, HeaderValue::from_static("GET,HEAD,OPTIONS"));
 
           // method not allowed
           } else if request_method != Method::GET && request_method != Method::HEAD {
@@ -366,7 +376,7 @@ pub async fn serve_proxy(
                 response
               }
 
-              R::NotModfied => {
+              R::NotModified => {
                 let mut response = Response::new(Body::empty());
                 *response.status_mut() = StatusCode::NOT_MODIFIED;
                 response
@@ -378,8 +388,64 @@ pub async fn serve_proxy(
                 response
               }
 
-              R::Serve { file, headers, .. } => {
-                let body = Body::file(file);
+              R::RangeNotSatisfiable => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+                response
+              }
+
+              R::Serve {
+                mut file,
+                range,
+                mut headers,
+                metadata,
+                ..
+              } => {
+                let content_range: Option<ContentRange>;
+                let content_length: ContentLength;
+                let reader: Box<dyn std::io::Read + Send + Sync + 'static>;
+
+                match range {
+                  Some((start_bound, end_bound)) => {
+                    let start = match start_bound {
+                      Bound::Included(start) => start,
+                      Bound::Excluded(start) => start + 1,
+                      Bound::Unbounded => 0,
+                    };
+
+                    let end = match end_bound {
+                      Bound::Included(end) => end + 1,
+                      Bound::Excluded(end) => end,
+                      Bound::Unbounded => metadata.len(),
+                    };
+
+                    let len = end - start;
+
+                    content_length = ContentLength(len);
+                    content_range = Some(ContentRange::bytes(start..end, metadata.len()).unwrap());
+
+                    if start != 0 {
+                      file
+                        .seek(std::io::SeekFrom::Start(start))
+                        .map_err(ProxyHttpError::FileSeek)?;
+                    }
+
+                    if end != metadata.len() {
+                      let take = file.take(len);
+                      reader = Box::new(take);
+                    } else {
+                      reader = Box::new(file);
+                    }
+                  }
+
+                  None => {
+                    content_range = None;
+                    content_length = ContentLength(metadata.len());
+                    reader = Box::new(file);
+                  }
+                };
+
+                let body = Body::read(reader);
 
                 #[cfg(any(
                   feature = "compression-br",
@@ -388,38 +454,54 @@ pub async fn serve_proxy(
                   feature = "compression-deflate"
                 ))]
                 {
-                  let compression = crate::option!(
-                    app.compression.as_deref(),
-                    config.http.compression.as_deref()
-                    => DEFAULT_COMPRESSION
-                  );
+                  match content_range {
+                    Some(content_range) => {
+                      // we do not compress range responses
+                      let mut response = Response::new(body);
+                      *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                      headers.typed_insert(content_length);
+                      headers.typed_insert(content_range);
+                      *response.headers_mut() = headers;
+                      response
+                    }
 
-                  let compression_content_types = crate::option!(
-                    app.compression_content_types.as_deref(),
-                    config.http.compression_content_types.as_deref()
-                    => DEFAULT_COMPRESSION_CONTENT_TYPES
-                  );
+                    None => {
+                      let compression = crate::option!(
+                        app.compression.as_deref(),
+                        config.http.compression.as_deref()
+                        => crate::config::defaults::DEFAULT_COMPRESSION
+                      );
 
-                  let compression_min_size = crate::option!(
-                    app.compression_min_size,
-                    config.http.compression_min_size,
-                    => DEFAULT_COMPRESSION_MIN_SIZE
-                  );
+                      let compression_content_types = crate::option!(
+                        app.compression_content_types.as_deref(),
+                        config.http.compression_content_types.as_deref()
+                        => crate::config::defaults::DEFAULT_COMPRESSION_CONTENT_TYPES
+                      );
 
-                  let (body, headers) = compress(
-                    compression,
-                    compression_content_types,
-                    compression_min_size,
-                    request.headers().get(hyper::header::ACCEPT_ENCODING),
-                    StatusCode::OK,
-                    body,
-                    headers,
-                  );
+                      let compression_min_size = crate::option!(
+                        app.compression_min_size,
+                        config.http.compression_min_size,
+                        => crate::config::defaults::DEFAULT_COMPRESSION_MIN_SIZE
+                      );
 
-                  let mut response = Response::new(body);
-                  *response.status_mut() = StatusCode::OK;
-                  *response.headers_mut() = headers;
-                  response
+                      headers.typed_insert(content_length);
+
+                      let (body, headers) = compress(
+                        compression,
+                        compression_content_types,
+                        compression_min_size,
+                        request.headers().get(hyper::header::ACCEPT_ENCODING),
+                        StatusCode::OK,
+                        body,
+                        headers,
+                      );
+
+                      let mut response = Response::new(body);
+                      *response.status_mut() = StatusCode::OK;
+                      *response.headers_mut() = headers;
+                      response
+                    }
+                  }
                 }
 
                 #[cfg(not(any(
@@ -429,16 +511,31 @@ pub async fn serve_proxy(
                   feature = "compression-deflate"
                 )))]
                 {
-                  let mut response = Response::new(body);
-                  *response.status_mut() = StatusCode::OK;
-                  *response.headers_mut = headers;
-                  response
+                  match content_range {
+                    Some(content_range) => {
+                      let mut response = Response::new(Body::empty());
+                      *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                      *response.headers_mut() = headers;
+                      response.headers_mut().typed_insert(content_length);
+                      response.headers_mut().typed_insert(content_range);
+                      response
+                    }
+
+                    None => {
+                      let mut response = Response::new(body);
+                      *response.status_mut() = StatusCode::OK;
+                      *response.headers_mut() = headers;
+                      response_headers_mut().typed_insert(content_length);
+                      response
+                    }
+                  }
                 }
               }
             };
           }
 
           response.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
+          response.headers_mut().typed_insert(AcceptRanges::bytes());
           add_headers!(response.headers_mut(), config.http.response_headers);
           add_headers!(response.headers_mut(), app.response_headers);
           add_headers!(response.headers_mut(), response_headers);
