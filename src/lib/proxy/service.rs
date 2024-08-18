@@ -1,7 +1,8 @@
 #![allow(clippy::declare_interior_mutable_const)] // silence const headers warning
 #![allow(non_camel_case_types)] // silence #[dynamic] warning
-#![allow(non_upper_case_globals)]
-// silence #[dynamic] warning
+#![allow(non_upper_case_globals)] // silence #[dynamic] warning
+use headers::{AcceptRanges, ContentLength, ContentRange, HeaderMapExt};
+use http::header::ALLOW;
 use http::Uri;
 use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderName, HeaderValue, CONNECTION, CONTENT_TYPE, HOST, SERVER};
@@ -17,13 +18,20 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
-use std::{convert::Infallible, ops::Deref, pin::Pin, sync::Arc};
+use std::{convert::Infallible, pin::Pin, sync::Arc};
+#[cfg(feature = "serve-static")]
+use std::{
+  io::{Read, Seek},
+  ops::Bound,
+};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::time::FutureExt;
 use url::Host;
 
+#[cfg(feature = "interpolation")]
+use super::context::HttpContext;
 use super::error::ProxyStreamError;
 use super::header::CONNECTION_UPGRADE;
 use super::util::{remove_hop_headers, resolve_host_port};
@@ -39,8 +47,13 @@ use crate::config::defaults::{
   DEFAULT_STREAM_PROXY_WRITE_TIMEOUT, DEFAULT_STREAM_RETRY_BACKOFF,
   DEFAULT_STREAM_SERVER_READ_TIMEOUT, DEFAULT_STREAM_SERVER_WRITE_TIMEOUT,
 };
+
 use crate::config::matcher::RequestInfo;
-use crate::config::{Balance, Config, HttpApp, HttpHandle, HttpUpstream, StreamHandle};
+use crate::config::{
+  Balance, Config, HttpApp, HttpHandle, HttpUpstream, ProxyHeaders, ResponseHeaders, StreamHandle,
+};
+#[cfg(feature = "interpolation")]
+use crate::context::Interpolation;
 use crate::net::timeout::TimeoutIo;
 use crate::proxy::balance::balance_sort;
 use crate::proxy::error::ProxyHttpError;
@@ -49,13 +62,13 @@ use crate::proxy_protocol::ProxyHeader;
 #[allow(unused)]
 use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
-use crate::serde::header_name::SHeaderName;
-use crate::serde::header_value::SHeaderValue;
 use crate::service::{Connection, StreamService};
 #[cfg(feature = "stats")]
 use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 use crate::upgrade::{request_connection_upgrade, response_connection_upgrade};
+#[cfg(feature = "interpolation")]
+use unwrap_infallible::UnwrapInfallible;
 
 #[inline(always)]
 #[must_use = "increment_open_connections returns a drop guard"]
@@ -109,18 +122,18 @@ pub fn resolve_upstream_app<'a>(
   feature = "compression-deflate"
 ))]
 fn compress(
-  app_compression: &[crate::config::Compress],
-  app_compression_content_types: &[ContentTypeMatcher],
-  app_compression_min_size: u64,
+  compression: &[crate::config::Compress],
+  compression_content_types: &[ContentTypeMatcher],
+  compression_min_size: u64,
   accept_encoding: Option<&HeaderValue>,
   status: StatusCode,
   upstream_body: Body,
   upstream_headers: hyper::HeaderMap,
 ) -> (Body, hyper::HeaderMap) {
   if let Some(selected) = crate::compression::should_compress(
-    app_compression,
-    app_compression_content_types,
-    app_compression_min_size,
+    compression,
+    compression_content_types,
+    compression_min_size,
     accept_encoding,
     status,
     upstream_body.size_hint(),
@@ -166,35 +179,42 @@ pub async fn serve_proxy(
   #[cfg(feature = "access-log")]
   let request_user_agent = request.headers().get(hyper::header::USER_AGENT).cloned();
 
-  #[cfg(feature = "interpolation")]
-  let request_forwarded = request.headers().get(hyper::header::FORWARDED).cloned();
-
-  #[cfg(feature = "interpolation")]
-  let request_x_forwarded_for = request
-    .headers()
-    .get(crate::proxy::header::X_FORWARDED_FOR)
-    .cloned();
-
-  #[cfg(feature = "interpolation")]
-  let request_x_forwarded_host = request
-    .headers()
-    .get(crate::proxy::header::X_FORWARDED_HOST)
-    .cloned();
-
-  #[cfg(feature = "interpolation")]
-  let request_x_forwarded_proto = request
-    .headers()
-    .get(crate::proxy::header::X_FORWARDED_PROTO)
-    .cloned();
-
-  #[cfg(feature = "interpolation")]
-  let request_x_forwarded_port = request
-    .headers()
-    .get(crate::proxy::header::X_FORWARDED_PORT)
-    .cloned();
-
   let (host, port) = resolve_host_port(&request)?;
   let host = host.to_string();
+
+  #[cfg(feature = "interpolation")]
+  use crate::proxy::header::{
+    X_FORWARDED_FOR, X_FORWARDED_HOST, X_FORWARDED_PORT, X_FORWARDED_PROTO,
+  };
+
+  #[cfg(feature = "interpolation")]
+  let request_forwarded = request.headers().get(hyper::header::FORWARDED).cloned();
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_for = request.headers().get(X_FORWARDED_FOR).cloned();
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_host = request.headers().get(X_FORWARDED_HOST).cloned();
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_proto = request.headers().get(X_FORWARDED_PROTO).cloned();
+  #[cfg(feature = "interpolation")]
+  let request_x_forwarded_port = request.headers().get(X_FORWARDED_PORT).cloned();
+
+  #[cfg(feature = "interpolation")]
+  let ctx = HttpContext {
+    is_ssl,
+    host: &host,
+    port,
+    method: &request_method,
+    version: request_version,
+    uri: &request_uri,
+    remote_addr,
+    local_addr,
+    proxy_header: proxy_header.as_ref(),
+    request_forwarded: request_forwarded.as_ref(),
+    request_x_forwarded_for: request_x_forwarded_for.as_ref(),
+    request_x_forwarded_host: request_x_forwarded_host.as_ref(),
+    request_x_forwarded_proto: request_x_forwarded_proto.as_ref(),
+    request_x_forwarded_port: request_x_forwarded_port.as_ref(),
+  };
 
   let app = match resolve_upstream_app(&host, config, local_addr, is_ssl) {
     Some(app) => app,
@@ -221,8 +241,8 @@ pub async fn serve_proxy(
     let handle_balance: Option<Balance>;
     let handle_retries: Option<usize>;
     let handle_retry_backoff: Option<BackOff>;
-    let handle_proxy_headers: &[(SHeaderName, SHeaderValue)];
-    let handle_response_headers: &[(SHeaderName, SHeaderValue)];
+    let handle_proxy_headers: &ProxyHeaders;
+    let handle_response_headers: &ResponseHeaders;
     let handle_proxy_protocol_write_timeout: Option<SDuration>;
     let handle_state_round_robin_index: &Arc<AtomicUsize>;
     let handle_proxy_read_timeout: Option<SDuration>;
@@ -231,329 +251,31 @@ pub async fn serve_proxy(
     let upstreams: &[HttpUpstream];
 
     #[cfg(feature = "interpolation")]
-    macro_rules! var {
-      ($f:ident, scheme) => {{
-        $f.push_str(if is_ssl { "https" } else { "http" })
-      }};
-
-      ($f:ident, proto) => {{
-        $f.push_str(if is_ssl { "https" } else { "http" })
-      }};
-
-      ($f:ident, host) => {{
-        $f.push_str(&host);
-      }};
-
-      ($f:ident, port) => {{
-        if let Some(port) = port {
-          let _ = write!($f, ":{}", port);
-        }
-      }};
-
-      ($f:ident, method) => {{
-        $f.push_str(request_method.as_str())
-      }};
-
-      ($f:ident, version) => {{
-        $f.push_str(match request_version {
-          hyper::Version::HTTP_09 => "0.9",
-          hyper::Version::HTTP_10 => "1.0",
-          hyper::Version::HTTP_11 => "1.1",
-          hyper::Version::HTTP_2 => "2.0",
-          hyper::Version::HTTP_3 => "3.0",
-          _ => "unknown",
-        })
-      }};
-
-      ($f:ident, request_uri) => {{
-        match request_uri.path_and_query() {
-          Some(uri) => $f.push_str(uri.as_str()),
-          None => $f.push_str("/"),
-        }
-      }};
-
-      ($f:ident, connection_remote_ip) => {{
-        let _ = write!($f, "{}", remote_addr.ip());
-      }};
-
-      ($f:ident, proxy_protocol_remote_ip) => {{
-        match &proxy_header {
-          Some(header) => match header.source_addr() {
-            Some(addr) => {
-              let _ = write!($f, "{}", addr.ip());
-            }
-            None => {
-              $f.push_str("unknown");
-            }
-          },
-
-          None => {
-            $f.push_str("unknown");
-          }
-        }
-      }};
-
-      ($f:ident, remote_ip) => {{
-        match &proxy_header {
-          Some(header) => match header.source_addr() {
-            Some(addr) => {
-              let _ = write!($f, "{}", addr.ip());
-            }
-            None => {
-              let _ = write!($f, "{}", remote_addr.ip());
-            }
-          },
-
-          None => {
-            let _ = write!($f, "{}", remote_addr.ip());
-          }
-        }
-      }};
-
-      ($f:ident, forwarded) => {{
-        // for(self)
-        if remote_addr.is_ipv4() {
-          let _ = write!($f, "for={}", remote_addr);
-        } else {
-          let _ = write!($f, "for=\"[{}]:{}\"", remote_addr.ip(), remote_addr.port());
-        }
-
-        // by(self)
-        if local_addr.is_ipv4() {
-          let _ = write!($f, ";by={}", local_addr);
-        } else {
-          let _ = write!($f, ";by=\"[{}]:{}\"", local_addr.ip(), local_addr.port());
-        }
-
-        // proto(self)
-        let _ = write!($f, ";proto={}", if is_ssl { "https" } else { "http" });
-
-        // host(self)
-        let _ = write!($f, ";host={}", host);
-
-        // by(proxy_protocol)
-        if let Some(header) = &proxy_header {
-          match (header.destination_addr(), header.source_addr()) {
-            (Some(addr), source_addr) => {
-              if addr.is_ipv4() {
-                let _ = write!($f, ",for={}", addr);
-              } else {
-                let _ = write!($f, ",for=\"[{}]:{}\"", addr.ip(), addr.port());
-              }
-
-              if let Some(source_addr) = source_addr {
-                if source_addr.is_ipv4() {
-                  let _ = write!($f, ";by={}", source_addr);
-                } else {
-                  let _ = write!($f, ";by=\"[{}]:{}\"", source_addr.ip(), source_addr.port());
-                }
-              }
-            }
-            (None, Some(source_addr)) => {
-              if source_addr.is_ipv4() {
-                let _ = write!($f, ";by={}", source_addr);
-              } else {
-                let _ = write!($f, ";by=\"[{}]:{}\"", source_addr.ip(), source_addr.port());
-              }
-            }
-            (None, None) => {}
-          }
-
-          // headers
-          if let Some(prev) = &request_forwarded {
-            if let Ok(prev) = prev.to_str() {
-              $f.push(',');
-              $f.push_str(prev);
-            }
-          }
-        }
-      }};
-
-      ($f:ident, x_forwarded_for) => {{
-        // we do not include the port here as some server implementations
-        // are not able to handle this header correctly when it includes a port
-        // the above, x-forwarded-port
-        // Eg: 255.1.5.9
-        // Eg: 255.1.5.9,::ffff:ffff
-
-        // self
-        let _ = write!($f, "{}", remote_addr.ip());
-        if let Some(proxy_header) = &proxy_header {
-          if let Some(addr) = proxy_header.source_addr() {
-            let _ = write!($f, ",{}", addr.ip());
-          }
-        }
-
-        // follow
-        match &request_x_forwarded_for {
-          Some(header) => match header.to_str() {
-            Ok(header) => {
-              let _ = write!($f, ",{}", header);
-            }
-            _ => {}
-          },
-          _ => {}
-        }
-      }};
-
-      ($f:ident, x_forwarded_port) => {{
-        // Eg: 80
-        // Eg: 80,443
-
-        // self
-        let _ = write!($f, "{}", remote_addr.port());
-
-        // proxy protocol
-        if let Some(proxy_header) = &proxy_header {
-          if let Some(addr) = proxy_header.source_addr() {
-            let _ = write!($f, ",{}", addr.port());
-          }
-        }
-
-        // header
-        match &request_x_forwarded_port {
-          Some(header) => match header.to_str() {
-            Ok(header) => {
-              let _ = write!($f, ",{}", header);
-            }
-            _ => {}
-          },
-          _ => {}
-        }
-      }};
-
-      ($f:ident, x_forwarded_host) => {{
-        // Eg: foo.com
-        // Eg: foo.com,bar.com
-
-        // self
-        let _ = $f.write_str(&host);
-
-        // header
-        match &request_x_forwarded_host {
-          Some(header) => match header.to_str() {
-            Ok(header) => {
-              let _ = write!($f, ",{}", header);
-            }
-            _ => {}
-          },
-          _ => {}
-        }
-      }};
-
-      ($f:ident, x_forwarded_proto) => {{
-        // Eg: https
-        // Eg: https,http
-
-        // self
-        $f.push_str(if is_ssl { "https" } else { "http" });
-
-        // header
-        match &request_x_forwarded_proto {
-          Some(header) => match header.to_str() {
-            Ok(header) => {
-              let _ = write!($f, ",{}", header);
-            }
-            _ => {}
-          },
-          _ => {}
-        }
-      }};
-
-      ($f:ident, via) => {{
-        // Eg: HTTP/1.1 example.com
-        // Eg: HTTP/2.0 example.com:8000
-
-        $f.push_str(match request_version {
-          hyper::Version::HTTP_09 => "HTTP/0.9",
-          hyper::Version::HTTP_10 => "HTTP/1.0",
-          hyper::Version::HTTP_11 => "HTTP/1.1",
-          hyper::Version::HTTP_2 => "HTTP/2.0",
-          hyper::Version::HTTP_3 => "HTTP/3.0",
-          _ => "unknown",
-        });
-
-        $f.push(' ');
-
-        var!($f, host);
-        var!($f, port);
-      }};
-    }
-
-    // TODO: document this and move out of the service function
-    #[cfg(feature = "interpolation")]
-    macro_rules! interpolate {
-      ($source:expr) => {{
-        let src = $source;
-
-        use std::fmt::Write;
-        use $crate::interpolate::{tokens, Token as T};
-        let mut f = String::with_capacity(src.len());
-
-        for token in tokens(src) {
-          match token {
-            T::Lit(v) => {
-              f.push_str(v);
-            }
-
-            T::Var(ident) => match ident {
-              "scheme" => var!(f, scheme),
-              "proto" => var!(f, proto),
-              "host" => var!(f, host),
-              "port" => var!(f, port),
-              "method" => var!(f, method),
-              "version" => var!(f, version),
-              "request_uri" => var!(f, request_uri),
-              "connection_remote_ip" => var!(f, connection_remote_ip),
-              "proxy_protocol_remote_ip" => var!(f, proxy_protocol_remote_ip),
-              "remote_ip" => var!(f, remote_ip),
-              "forwarded" => var!(f, forwarded),
-              "x_forwarded_for" => var!(f, x_forwarded_for),
-              "x_forwarded_port" => var!(f, x_forwarded_port),
-              "x_forwarded_host" => var!(f, x_forwarded_host),
-              "x_forwarded_proto" => var!(f, x_forwarded_proto),
-              "via" => var!(f, via),
-              _ => {
-                f.push_str("${");
-                f.push_str(ident);
-                f.push('}');
-              }
-            },
-          }
-        }
-
-        f
-      }};
-    }
-
-    #[cfg(feature = "interpolation")]
-    macro_rules! interpolate_header_value {
-      ($source:expr) => {{
-        let source = $source;
-        let target = interpolate!(source);
-        HeaderValue::try_from(target)
-          .map_err(|_| ProxyHttpError::InvalidHeaderInterpolation(source.into()))?
-      }};
-    }
-
     macro_rules! add_headers {
       ($headers:expr, $list:expr) => {{
-        #[cfg(feature = "interpolation")]
-        for (k, v) in $list.iter() {
-          if v.as_bytes().is_empty() {
+        use std::ops::Deref;
+        for (k, interpolation) in $list.iter() {
+          if interpolation.is_empty() {
             $headers.remove(k.deref());
           } else {
-            let value = interpolate_header_value!(v.to_str().unwrap());
+            let interpolated = interpolation.render_to_string(&ctx).unwrap_infallible();
+            let value = HeaderValue::try_from(interpolated)
+              .map_err(|_| ProxyHttpError::InvalidHeaderInterpolation)?;
             $headers.insert(HeaderName::from(k.clone()), value);
           }
         }
+      }};
+    }
 
-        #[cfg(not(feature = "interpolation"))]
+    #[cfg(not(feature = "interpolation"))]
+    macro_rules! add_headers {
+      ($headers:expr, $list:expr) => {{
+        use std::ops::Deref;
         for (k, v) in $list.iter() {
           if v.as_bytes().is_empty() {
             $headers.remove(k.deref());
           } else {
-            $headers.insert(HeaderName::from(k.clone()), HeaderValue::from(v.clone()));
+            $headers.insert(HeaderName::from(k.clone()), v.deref().clone());
           }
         }
       }};
@@ -571,12 +293,14 @@ pub async fn serve_proxy(
           let body = match content {
             Some(content) => {
               #[cfg(feature = "interpolation")]
-              let data = interpolate!(content);
+              {
+                Body::full(content.render_to_string(&ctx).unwrap_infallible())
+              }
 
               #[cfg(not(feature = "interpolation"))]
-              let data = String::from(content);
-
-              Body::full(data)
+              {
+                Body::full(bytes::Bytes::copy_from_slice(content.as_bytes()))
+              }
             }
 
             None => Body::empty(),
@@ -589,6 +313,232 @@ pub async fn serve_proxy(
           add_headers!(response.headers_mut(), response_headers);
 
           response.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
+
+          return Ok(response);
+        }
+
+        #[cfg(feature = "serve-static")]
+        HttpHandle::Static {
+          base_dir,
+          index_files,
+          dot_files,
+          response_headers,
+        } => {
+          let mut response: Response<Body>;
+
+          // OPTIONS handler, can be overriden with configuration
+          if request.method() == Method::OPTIONS {
+            response = Response::new(Body::empty());
+            // we prefer OK over NO_CONTENT as some browsers doesn't handle it very well
+            *response.status_mut() = StatusCode::OK;
+            response
+              .headers_mut()
+              .insert(ALLOW, HeaderValue::from_static("GET,HEAD,OPTIONS"));
+
+          // method not allowed
+          } else if request_method != Method::GET && request_method != Method::HEAD {
+            return Err(ProxyHttpError::StaticMethodNotAllowed);
+
+          // serve
+          } else {
+            use crate::serve_static::resolve;
+            use crate::serve_static::DotFiles;
+            use crate::serve_static::ServeStaticOptions;
+
+            let path = match request.uri().path() {
+              "" | "/" => "",
+              path if path.starts_with('/') => &path[1..],
+              path => path,
+            };
+
+            let options = ServeStaticOptions {
+              index_files,
+              dot_files: dot_files.unwrap_or(DotFiles::Ignore),
+            };
+
+            let resolved = resolve(base_dir, path, request.headers(), options)
+              .await
+              .map_err(ProxyHttpError::ResolveStatic)?;
+
+            use crate::serve_static::Resolved as R;
+
+            response = match resolved {
+              R::AppendSlash => {
+                let target = format!("{}/", request.uri().path());
+                let target = HeaderValue::try_from(target)
+                  .map_err(ProxyHttpError::StaticAppendSlashInvalidRedirect)?;
+
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::FOUND;
+                response
+                  .headers_mut()
+                  .insert(hyper::header::LOCATION, target);
+                response
+              }
+
+              R::NotModified => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::NOT_MODIFIED;
+                response
+              }
+
+              R::UnmodifiedPreconditionFailed => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::PRECONDITION_FAILED;
+                response
+              }
+
+              R::RangeNotSatisfiable => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::RANGE_NOT_SATISFIABLE;
+                response
+              }
+
+              R::Serve {
+                mut file,
+                range,
+                mut headers,
+                metadata,
+                ..
+              } => {
+                let content_range: Option<ContentRange>;
+                let content_length: ContentLength;
+                let reader: Box<dyn std::io::Read + Send + Sync + 'static>;
+
+                match range {
+                  Some((start_bound, end_bound)) => {
+                    let start = match start_bound {
+                      Bound::Included(start) => start,
+                      Bound::Excluded(start) => start + 1,
+                      Bound::Unbounded => 0,
+                    };
+
+                    let end = match end_bound {
+                      Bound::Included(end) => end + 1,
+                      Bound::Excluded(end) => end,
+                      Bound::Unbounded => metadata.len(),
+                    };
+
+                    let len = end - start;
+
+                    content_length = ContentLength(len);
+                    content_range = Some(ContentRange::bytes(start..end, metadata.len()).unwrap());
+
+                    if start != 0 {
+                      file
+                        .seek(std::io::SeekFrom::Start(start))
+                        .map_err(ProxyHttpError::FileSeek)?;
+                    }
+
+                    if end != metadata.len() {
+                      let take = file.take(len);
+                      reader = Box::new(take);
+                    } else {
+                      reader = Box::new(file);
+                    }
+                  }
+
+                  None => {
+                    content_range = None;
+                    content_length = ContentLength(metadata.len());
+                    reader = Box::new(file);
+                  }
+                };
+
+                let body = Body::read(reader);
+
+                #[cfg(any(
+                  feature = "compression-br",
+                  feature = "compression-zstd",
+                  feature = "compression-gzip",
+                  feature = "compression-deflate"
+                ))]
+                {
+                  match content_range {
+                    Some(content_range) => {
+                      // we do not compress range responses
+                      let mut response = Response::new(body);
+                      *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                      headers.typed_insert(content_length);
+                      headers.typed_insert(content_range);
+                      *response.headers_mut() = headers;
+                      response
+                    }
+
+                    None => {
+                      let compression = crate::option!(
+                        app.compression.as_deref(),
+                        config.http.compression.as_deref()
+                        => crate::config::defaults::DEFAULT_COMPRESSION
+                      );
+
+                      let compression_content_types = crate::option!(
+                        app.compression_content_types.as_deref(),
+                        config.http.compression_content_types.as_deref()
+                        => crate::config::defaults::DEFAULT_COMPRESSION_CONTENT_TYPES
+                      );
+
+                      let compression_min_size = crate::option!(
+                        app.compression_min_size,
+                        config.http.compression_min_size,
+                        => crate::config::defaults::DEFAULT_COMPRESSION_MIN_SIZE
+                      );
+
+                      headers.typed_insert(content_length);
+
+                      let (body, headers) = compress(
+                        compression,
+                        compression_content_types,
+                        compression_min_size,
+                        request.headers().get(hyper::header::ACCEPT_ENCODING),
+                        StatusCode::OK,
+                        body,
+                        headers,
+                      );
+
+                      let mut response = Response::new(body);
+                      *response.status_mut() = StatusCode::OK;
+                      *response.headers_mut() = headers;
+                      response
+                    }
+                  }
+                }
+
+                #[cfg(not(any(
+                  feature = "compression-br",
+                  feature = "compression-zstd",
+                  feature = "compression-gzip",
+                  feature = "compression-deflate"
+                )))]
+                {
+                  match content_range {
+                    Some(content_range) => {
+                      let mut response = Response::new(Body::empty());
+                      *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                      *response.headers_mut() = headers;
+                      response.headers_mut().typed_insert(content_length);
+                      response.headers_mut().typed_insert(content_range);
+                      response
+                    }
+
+                    None => {
+                      let mut response = Response::new(body);
+                      *response.status_mut() = StatusCode::OK;
+                      *response.headers_mut() = headers;
+                      response_headers_mut().typed_insert(content_length);
+                      response
+                    }
+                  }
+                }
+              }
+            };
+          }
+
+          response.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
+          response.headers_mut().typed_insert(AcceptRanges::bytes());
+          add_headers!(response.headers_mut(), config.http.response_headers);
+          add_headers!(response.headers_mut(), app.response_headers);
+          add_headers!(response.headers_mut(), response_headers);
 
           return Ok(response);
         }
@@ -623,12 +573,7 @@ pub async fn serve_proxy(
           {
             let mut ctl = match jemalloc_pprof::PROF_CTL.as_ref() {
               Some(ctl) => ctl.lock().await,
-              None => {
-                let mut res = Response::new(Body::full("Profilling is not activated (1)"));
-                *res.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-                res.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
-                return Ok(res);
-              }
+              None => return Err(ProxyHttpError::HeapProfileLock),
             };
 
             if !ctl.activated() {
@@ -1248,24 +1193,22 @@ pub async fn serve_proxy(
     Ok(response) => {
       use crate::log::{access_log, DisplayHeader, DisplayOption, DisplayPort};
       access_log!(
-                "HTTP {remote_addr} => {local_addr} | {method} {scheme}://{host}{port}{path} - {referer} - {user_agent} => {proxied_to} | {status} {status_text} - {content_length} - {ms}ms",
-                remote_addr = remote_addr,
-                local_addr = local_addr,
-                method = request_method,
-                scheme = if is_ssl { "https" } else { "http" },
-                host = host,
-                port = DisplayPort(port),
-                path = DisplayOption(request_uri.path_and_query()),
-                referer = DisplayHeader(request_referer.as_ref()),
-                user_agent = DisplayHeader(request_user_agent.as_ref()),
-                proxied_to = proxied_to.as_deref().unwrap_or("None"),
-                status = response.status().as_u16(),
-                status_text = response.status().canonical_reason().unwrap_or(""),
-                content_length = DisplayHeader(
-                    response.headers().get(hyper::header::CONTENT_LENGTH)
-                ),
-                ms = start.elapsed().as_millis()
-            );
+        "HTTP {remote_addr} => {local_addr} | {method} {scheme}://{host}{port}{path} - {referer} - {user_agent} => {proxied_to} | {status} {status_text} - {content_length} - {ms}ms",
+        remote_addr = remote_addr,
+        local_addr = local_addr,
+        method = request_method,
+        scheme = if is_ssl { "https" } else { "http" },
+        host = host,
+        port = DisplayPort(port),
+        path = DisplayOption(request_uri.path_and_query()),
+        referer = DisplayHeader(request_referer.as_ref()),
+        user_agent = DisplayHeader(request_user_agent.as_ref()),
+        proxied_to = proxied_to.as_deref().unwrap_or("None"),
+        status = response.status().as_u16(),
+        status_text = response.status().canonical_reason().unwrap_or(""),
+        content_length = DisplayHeader(response.headers().get(hyper::header::CONTENT_LENGTH)),
+        ms = start.elapsed().as_millis()
+      );
     }
 
     Err(e) => {

@@ -34,8 +34,8 @@ pub enum ProxyHttpError {
   #[error("could not resolve proxy target")]
   UnresolvedLocation,
 
-  #[error("invalid header after interpolation: {0}")]
-  InvalidHeaderInterpolation(String),
+  #[error("invalid header after interpolation")]
+  InvalidHeaderInterpolation,
 
   #[error("compress body chunk error: {0}")]
   CompressBodyChunk(#[source] std::io::Error),
@@ -61,8 +61,31 @@ pub enum ProxyHttpError {
   #[error("heap profiling was not activated at compile time")]
   HeapProfileNotActivated,
 
+  #[error("heap profiling is not activated (1)")]
+  HeapProfileLock,
+
   #[error("error dumping heap profile: {0}")]
   HeapProfileError(#[source] anyhow::Error),
+
+  #[cfg(feature = "serve-static")]
+  #[error("file read error: {0}")]
+  FileRead(#[source] std::io::Error),
+
+  #[cfg(feature = "serve-static")]
+  #[error("error resolving static file: {0}")]
+  ResolveStatic(#[source] crate::serve_static::ServeStaticError),
+
+  #[cfg(feature = "serve-static")]
+  #[error("invalid redirect header value")]
+  StaticAppendSlashInvalidRedirect(#[source] hyper::http::header::InvalidHeaderValue),
+
+  #[cfg(feature = "serve-static")]
+  #[error("method not allowed, allowed method are OPTIONS, GET and HEAD")]
+  StaticMethodNotAllowed,
+
+  #[cfg(feature = "serve-static")]
+  #[error("file seek error: {0}")]
+  FileSeek(#[source] std::io::Error),
 
   #[error("client error: {message}")]
   Client {
@@ -92,7 +115,7 @@ impl ProxyHttpError {
       E::UpstreamUrlParse(_) => ErrorOriginator::User,
       E::UpstreamUrlMissingDomain => ErrorOriginator::Config,
       E::InvalidUpstreamUrlMissingHost => ErrorOriginator::Config,
-      E::InvalidHeaderInterpolation(_) => ErrorOriginator::Config,
+      E::InvalidHeaderInterpolation => ErrorOriginator::Config,
       E::IncomingBody(_) => ErrorOriginator::Io,
       E::CompressBodyChunk(_) => ErrorOriginator::Io,
       E::UpgradeIoBoth { .. } => ErrorOriginator::Io,
@@ -101,8 +124,20 @@ impl ProxyHttpError {
       E::StatsSerialize(_) => ErrorOriginator::Internal,
       E::HeapProfileNotCompiled => ErrorOriginator::Internal,
       E::HeapProfileNotActivated => ErrorOriginator::Internal,
+      E::HeapProfileLock => ErrorOriginator::Internal,
       E::HeapProfileError(_) => ErrorOriginator::Internal,
       E::Client { kind, .. } => kind.originator(),
+      #[cfg(feature = "serve-static")]
+      E::FileRead(_) => ErrorOriginator::Internal,
+      #[cfg(feature = "serve-static")]
+      E::StaticAppendSlashInvalidRedirect(_) => ErrorOriginator::User,
+      // TODO: do this properly
+      #[cfg(feature = "serve-static")]
+      E::ResolveStatic(_) => ErrorOriginator::User,
+      #[cfg(feature = "serve-static")]
+      E::StaticMethodNotAllowed => ErrorOriginator::User,
+      #[cfg(feature = "serve-static")]
+      E::FileSeek(_) => ErrorOriginator::Internal,
     }
   }
 
@@ -116,18 +151,39 @@ impl ProxyHttpError {
       E::InvalidHost => StatusCode::BAD_REQUEST,
       E::UpstreamUrlParse(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::UpstreamUrlMissingDomain => StatusCode::INTERNAL_SERVER_ERROR,
-      E::InvalidHeaderInterpolation(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      E::InvalidHeaderInterpolation => StatusCode::INTERNAL_SERVER_ERROR,
       E::InvalidUpstreamUrlMissingHost => StatusCode::INTERNAL_SERVER_ERROR,
       E::IncomingBody(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::CompressBodyChunk(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::StatsSerialize(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::HeapProfileNotCompiled => StatusCode::SERVICE_UNAVAILABLE,
       E::HeapProfileNotActivated => StatusCode::SERVICE_UNAVAILABLE,
+      E::HeapProfileLock => StatusCode::SERVICE_UNAVAILABLE,
       E::HeapProfileError(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::UpgradeIoBoth { .. } => StatusCode::BAD_REQUEST,
       E::UpgradeIoClient(_) => StatusCode::BAD_REQUEST,
       E::UpgradeIoUpstream(_) => StatusCode::BAD_GATEWAY,
+      #[cfg(feature = "serve-static")]
+      E::FileRead(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      #[cfg(feature = "serve-static")]
+      E::StaticAppendSlashInvalidRedirect(_) => StatusCode::BAD_REQUEST,
+      // TODO: do this properly
+      #[cfg(feature = "serve-static")]
+      E::ResolveStatic(e) => {
+        if e.is_not_found() {
+          StatusCode::NOT_FOUND
+        } else {
+          StatusCode::BAD_REQUEST
+        }
+      }
       E::Client { kind, .. } => kind.status(),
+
+      // TODO: add Allow header
+      #[cfg(feature = "serve-static")]
+      E::StaticMethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+
+      #[cfg(feature = "serve-static")]
+      E::FileSeek(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
   }
 }

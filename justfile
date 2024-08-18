@@ -166,3 +166,6 @@ doc:
 doc-open:
   xdg-open target/doc/proxide/index.html
 
+# build in debug mode
+debug:
+  cargo build --debug -j {{j}}

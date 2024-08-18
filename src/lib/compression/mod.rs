@@ -185,11 +185,13 @@ pub fn should_compress(
     return None;
   }
 
-  if upstream_status == StatusCode::PARTIAL_CONTENT {
-    log::debug!("status is PARTIAL_CONTENT");
+  // only compress OK responses
+  if upstream_status != StatusCode::OK {
+    log::debug!("status is not OK");
     return None;
   }
 
+  // only compress responses bigger than min_size
   if let Some(upper) = upstream_body_size_hint.upper() {
     if upper < min_size {
       log::debug!("upper limit under min_size: {} < {}", upper, min_size);
@@ -198,7 +200,7 @@ pub fn should_compress(
   }
 
   if let Some(content_encoding) = upstream_headers.get(hyper::header::CONTENT_ENCODING) {
-    if trim(content_encoding.as_bytes()).to_ascii_lowercase() != b"identity" {
+    if !trim(content_encoding.as_bytes()).eq_ignore_ascii_case(b"identity") {
       log::debug!("content encoding not identity: {:?}", content_encoding);
       return None;
     }

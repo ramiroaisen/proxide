@@ -25,21 +25,42 @@ use crate::compression::Encoding;
 
 use crate::log::logfile::LogFileConfig;
 use crate::log::LevelFilter;
+#[cfg(feature = "interpolation")]
+use crate::proxy::context::HttpInterpolation;
 use crate::proxy_protocol::ProxyProtocolVersion;
 use crate::serde::duration::SDuration;
 use crate::serde::header_name::SHeaderName;
-use crate::serde::header_value::SHeaderValue;
 use crate::serde::sni::Sni;
 use crate::serde::status_code::SStatusCode;
 use crate::serde::url::{HttpUpstreamBaseUrl, StreamUpstreamOrigin};
 
 #[allow(unused)]
 use crate::serde::content_type::ContentTypeMatcher;
+#[cfg(feature = "serve-static")]
+use crate::serve_static::DotFiles;
 
 pub mod listen;
 pub mod matcher;
 pub mod regex;
 pub mod server_name;
+
+#[cfg(feature = "interpolation")]
+pub type ResponseHeaders = Vec<(SHeaderName, HttpInterpolation)>;
+
+#[cfg(not(feature = "interpolation"))]
+pub type ResponseHeaders = Vec<(SHeaderName, crate::serde::header_value::SHeaderValue)>;
+
+#[cfg(feature = "interpolation")]
+pub type ProxyHeaders = Vec<(SHeaderName, HttpInterpolation)>;
+
+#[cfg(not(feature = "interpolation"))]
+pub type ProxyHeaders = Vec<(SHeaderName, crate::serde::header_value::SHeaderValue)>;
+
+#[cfg(feature = "interpolation")]
+pub type ResponseBody = HttpInterpolation;
+
+#[cfg(not(feature = "interpolation"))]
+pub type ResponseBody = String;
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
   value == &T::default()
@@ -307,9 +328,9 @@ pub struct Http {
   pub graceful_shutdown_timeout: Option<SDuration>,
 
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
+  pub response_headers: ResponseHeaders,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
+  pub proxy_headers: ProxyHeaders,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub retries: Option<usize>,
@@ -482,7 +503,7 @@ pub struct HttpApp {
   pub proxy_tcp_nodelay: Option<bool>,
 
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
+  pub response_headers: ResponseHeaders,
 
   #[serde(flatten)]
   pub handle: HttpHandle,
@@ -545,9 +566,9 @@ pub struct HttpUpstream {
   pub proxy_tcp_nodelay: Option<bool>,
 
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
+  pub proxy_headers: ProxyHeaders,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub response_headers: Vec<(SHeaderName, SHeaderValue)>,
+  pub response_headers: ResponseHeaders,
 
   #[cfg(any(
     feature = "compression-br",
@@ -685,21 +706,32 @@ pub enum HttpHandle {
   Return {
     status: SStatusCode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    response_headers: Vec<(SHeaderName, SHeaderValue)>,
+    response_headers: ResponseHeaders,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    body: Option<String>,
+    body: Option<ResponseBody>,
   },
 
   #[serde(rename = "heap_profile")]
   HeapProfile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    response_headers: Vec<(SHeaderName, SHeaderValue)>,
+    response_headers: ResponseHeaders,
   },
 
   #[serde(rename = "stats")]
   Stats {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    response_headers: Vec<(SHeaderName, SHeaderValue)>,
+    response_headers: ResponseHeaders,
+  },
+
+  #[cfg(feature = "serve-static")]
+  #[serde(rename = "static")]
+  Static {
+    base_dir: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    index_files: Vec<String>,
+    dot_files: Option<DotFiles>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    response_headers: ResponseHeaders,
   },
 
   #[serde(rename = "proxy")]
@@ -717,9 +749,9 @@ pub enum HttpHandle {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_tcp_nodelay: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    proxy_headers: Vec<(SHeaderName, SHeaderValue)>,
+    proxy_headers: ProxyHeaders,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    response_headers: Vec<(SHeaderName, SHeaderValue)>,
+    response_headers: ResponseHeaders,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_protocol_write_timeout: Option<SDuration>,
     #[serde(skip_deserializing, default)]

@@ -1,3 +1,5 @@
+use crate::context::Variable;
+
 const START: u8 = b'$';
 const OPEN: u8 = b'{';
 const CLOSE: u8 = b'}';
@@ -10,9 +12,9 @@ pub fn is_identifier_char(char: u8) -> bool {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Token<'a> {
-  Lit(&'a str),
-  Var(&'a str),
+pub enum Token<Var, Lit> {
+  Lit(Lit),
+  Var(Var),
 }
 
 /// parse a variable from the start of the source string
@@ -59,10 +61,10 @@ fn parse_lit(source: &str) -> Option<&str> {
       Some(slice) => match parse_var(slice) {
         Some(_) => break,
         None => end += 1,
-      }
+      },
     }
   }
-  
+
   if end == 0 {
     return None;
   }
@@ -70,47 +72,63 @@ fn parse_lit(source: &str) -> Option<&str> {
   Some(&source[0..end])
 }
 
-
-
 /// An iterator that yields [`Token`]s from a string
-pub struct TokensIter<'a> {
+pub struct TokensIter<'a, Var> {
   source: &'a str,
-  i: usize
-} 
+  i: usize,
+  _phantom: std::marker::PhantomData<fn() -> Var>,
+}
 
-impl<'a> Iterator for TokensIter<'a> {
-  type Item = Token<'a>;
+impl<'a, Var: Variable<'a>> Iterator for TokensIter<'a, Var> {
+  type Item = Result<Token<Var, &'a str>, Var::FromExprErr>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    
-    use Token::*;
-
     if self.i >= self.source.len() {
       return None;
     }
 
     match parse_var(&self.source[self.i..]) {
       Some(ident) => {
+        let var = match Var::from_expr(ident) {
+          Ok(var) => var,
+          Err(e) => return Some(Err(e)),
+        };
         self.i += ident.len() + 3;
-        Some(Var(ident))
-      },
+        Some(Ok(Token::Var(var)))
+      }
       None => match parse_lit(&self.source[self.i..]) {
         Some(lit) => {
           self.i += lit.len();
-          Some(Lit(lit))
-        },
+          Some(Ok(Token::Lit(lit)))
+        }
         None => None,
-      }
+      },
     }
   }
 }
 
 /// An iterator that yields [`Token`]s from a string
-pub fn tokens(source: &str) -> TokensIter<'_> {
+pub fn tokens<'a, Var: Variable<'a>>(source: &str) -> TokensIter<'_, Var> {
   TokensIter {
     source,
     i: 0,
+    _phantom: std::marker::PhantomData,
   }
+}
+
+pub fn render<'slice, 'var, Lit: AsRef<str>, Var: Variable<'var>>(
+  buf: &mut String,
+  tokens: &'slice [Token<Var, Lit>],
+  ctx: &Var::Context,
+) -> Result<(), Var::RenderErr> {
+  for token in tokens {
+    match token {
+      Token::Lit(lit) => buf.push_str(lit.as_ref()),
+      Token::Var(var) => var.render(buf, ctx)?,
+    }
+  }
+
+  Ok(())
 }
 
 #[cfg(test)]
@@ -154,23 +172,57 @@ mod test {
     }
   }
 
-
   #[test]
   fn tokens() {
-    let cases: &[(&str, &[Token<'_>])] = &[
-      ("${foo}", &[Var("foo")]), 
-      ("foo ${bar}", &[Lit("foo "), Var("bar")]),
-      ("foo ${bar} baz", &[Lit("foo "), Var("bar"), Lit(" baz")]),
-      ("foo ${bar} ${baz}", &[Lit("foo "), Var("bar"), Lit(" "), Var("baz")]),
-      ("foo $${bar}", &[Lit("foo $"), Var("bar")]),
-      ("foo $${bar} ${baz}", &[Lit("foo $"), Var("bar"), Lit(" "), Var("baz")]),
-      ("foo $${bar} $${baz}", &[Lit("foo $"), Var("bar"), Lit(" $"), Var("baz")]),
-      ("${foo}${bar}${baz}$$", &[Var("foo"), Var("bar"), Var("baz"), Lit("$$")]),
-      ("${foo}${bar}${baz}${literal", &[Var("foo"), Var("bar"), Var("baz"), Lit("${literal")]),
+    let cases: &[(&str, &[Token<String, &'static str>])] = &[
+      ("${foo}", &[Var("foo".into())]),
+      ("foo ${bar}", &[Lit("foo "), Var("bar".into())]),
+      (
+        "foo ${bar} baz",
+        &[Lit("foo "), Var("bar".into()), Lit(" baz")],
+      ),
+      (
+        "foo ${bar} ${baz}",
+        &[Lit("foo "), Var("bar".into()), Lit(" "), Var("baz".into())],
+      ),
+      ("foo $${bar}", &[Lit("foo $"), Var("bar".into())]),
+      (
+        "foo $${bar} ${baz}",
+        &[Lit("foo $"), Var("bar".into()), Lit(" "), Var("baz".into())],
+      ),
+      (
+        "foo $${bar} $${baz}",
+        &[
+          Lit("foo $"),
+          Var("bar".into()),
+          Lit(" $"),
+          Var("baz".into()),
+        ],
+      ),
+      (
+        "${foo}${bar}${baz}$$",
+        &[
+          Var("foo".into()),
+          Var("bar".into()),
+          Var("baz".into()),
+          Lit("$$"),
+        ],
+      ),
+      (
+        "${foo}${bar}${baz}${literal",
+        &[
+          Var("foo".into()),
+          Var("bar".into()),
+          Var("baz".into()),
+          Lit("${literal"),
+        ],
+      ),
     ];
 
     for (source, expected) in cases {
-      let actual = super::tokens(source).collect::<Vec<_>>();
+      let actual = super::tokens::<String>(source)
+        .map(Result::unwrap)
+        .collect::<Vec<_>>();
       assert_eq!(actual, *expected, "{} failed", source);
     }
   }
