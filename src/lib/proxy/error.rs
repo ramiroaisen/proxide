@@ -79,6 +79,10 @@ pub enum ProxyHttpError {
   #[error("invalid redirect header value")]
   StaticAppendSlashInvalidRedirect(#[source] hyper::http::header::InvalidHeaderValue),
 
+  #[cfg(feature = "serve-static")]
+  #[error("method not allowed, allowed method are OPTIONS, GET and HEAD")]
+  StaticMethodNotAllowed,
+
   #[error("client error: {message}")]
   Client {
     kind: ClientErrorKind,
@@ -126,6 +130,7 @@ impl ProxyHttpError {
       // TODO: do this properly
       #[cfg(feature = "serve-static")]
       E::ResolveStatic(_) => ErrorOriginator::User,
+      E::StaticMethodNotAllowed => ErrorOriginator::User,
     }
   }
 
@@ -165,6 +170,9 @@ impl ProxyHttpError {
         }
       }
       E::Client { kind, .. } => kind.status(),
+
+      // TODO: add Allow header
+      E::StaticMethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
     }
   }
 }

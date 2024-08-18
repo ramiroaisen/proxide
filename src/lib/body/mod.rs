@@ -1,22 +1,19 @@
 use crate::channel::spsc;
 use bytes::Bytes;
+use bytes::BytesMut;
 use futures::Stream;
 use http_body::Frame;
 use http_body::SizeHint;
 use hyper::body::Body as HyperBody;
 use hyper::body::Incoming;
 use pin_project::{pin_project, pinned_drop};
+use std::io::Read;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
 #[cfg(feature = "serve-static")]
-use std::mem::MaybeUninit;
-#[cfg(feature = "serve-static")]
-use tokio::io::AsyncRead;
-
-#[cfg(feature = "serve-static")]
-const FILE_READ_BUF_SIZE: usize = 1024 * 64;
+const FILE_READ_BUF_SIZE: usize = 1024 * 4;
 
 use crate::proxy::error::ProxyHttpError;
 
@@ -30,7 +27,7 @@ pub enum BodyKind {
   Incoming(#[pin] Incoming),
   Stream(FrameStream),
   #[cfg(feature = "serve-static")]
-  File(#[pin] tokio::fs::File),
+  File(std::io::BufReader<std::fs::File>),
 }
 
 #[pin_project(PinnedDrop)]
@@ -81,9 +78,9 @@ impl Body {
   }
 
   #[cfg(feature = "serve-static")]
-  pub fn file(file: tokio::fs::File) -> Self {
+  pub fn file(file: std::fs::File) -> Self {
     Self {
-      kind: BodyKind::File(file),
+      kind: BodyKind::File(std::io::BufReader::new(file)),
       on_drop: vec![],
     }
   }
@@ -123,9 +120,9 @@ impl BodyKind {
   }
 
   #[cfg(feature = "serve-static")]
-  pub fn file(file: tokio::fs::File) -> Self {
+  pub fn file(file: std::fs::File) -> Self {
     #[cfg(feature = "serve-static")]
-    Self::File(file)
+    Self::File(std::io::BufReader::new(file))
   }
 
   // kanal channel is not Sync
@@ -159,19 +156,15 @@ impl HyperBody for BodyKind {
       BodyKindProjection::Stream(stream) => stream.as_mut().poll_next(cx),
       #[cfg(feature = "serve-static")]
       BodyKindProjection::File(file) => {
-        let mut buf = [const { MaybeUninit::<u8>::uninit() }; FILE_READ_BUF_SIZE];
-        let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf[..]);
-        match std::task::ready!(file.poll_read(cx, &mut read_buf)) {
-          Ok(()) => {
-            if read_buf.filled().is_empty() {
-              return Poll::Ready(None);
-            }
-
-            Poll::Ready(Some(Ok(Frame::data(Bytes::copy_from_slice(
-              read_buf.filled(),
-            )))))
+        // let mut buf = [const { MaybeUninit::<u8>::uninit() }; FILE_READ_BUF_SIZE];
+        // let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf[..]);
+        let mut buf = BytesMut::zeroed(FILE_READ_BUF_SIZE);
+        match file.read(&mut buf) {
+          Ok(0) => Poll::Ready(None),
+          Ok(n) => {
+            buf.truncate(n);
+            Poll::Ready(Some(Ok(Frame::data(buf.freeze()))))
           }
-
           Err(e) => Poll::Ready(Some(Err(ProxyHttpError::FileRead(e)))),
         }
       }
@@ -183,7 +176,7 @@ impl HyperBody for BodyKind {
       BodyKind::Empty => true,
       BodyKind::Full(opt) => opt.is_none(),
       BodyKind::Incoming(incoming) => incoming.is_end_stream(),
-      // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not trusted to be correct
+      // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not be trusted to be correct
       BodyKind::Stream(_) => false,
       #[cfg(feature = "serve-static")]
       BodyKind::File(_) => false,

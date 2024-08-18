@@ -1,9 +1,9 @@
-use std::net::SocketAddr;
-use std::net::IpAddr;
 use http::header::AUTHORIZATION;
 use http::Method;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
+use std::net::SocketAddr;
 
 use crate::proxy::header::list_contains;
 
@@ -15,14 +15,13 @@ pub struct RequestInfo<'a, B> {
   pub remote_addr: SocketAddr,
 }
 
-
 /// Match requests by many parameters. \
 /// To use in `$config.http.apps[n].when[n].match`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestMatcher {
   /// matches all requests
-  All,  
+  All,
   /// matches requests by path, see [`PathMatcher`]
   Path(PathMatcher),
   /// matches requests by header, see [`HeaderMatcher`]
@@ -47,7 +46,7 @@ pub enum RequestMatcher {
 pub enum PathMatcher {
   /// matches all paths
   All,
-  /// matches exactly the path specified 
+  /// matches exactly the path specified
   Exact(String),
   /// matches paths that start with the specified prefix optionally followed by a slash
   Scope(String),
@@ -66,7 +65,7 @@ pub enum HeaderMatcher {
   /// matches if the header with specified name is a list of comma separated values that contains the specified value
   ListContains(String, String),
   /// matches if the header with specified name matches the specified regex
-  Regex(String, SRegex)
+  Regex(String, SRegex),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -76,9 +75,9 @@ pub enum MethodMatcher {
   Eq(String),
   /// matches if the method is not equal to the specified method
   Ne(String),
-  /// matches the specified method
+  /// matches is the method is one of the specified methods
   In(Vec<String>),
-  /// matches if the method is not in the specified list
+  /// matches if the method is not one of the specified methods
   NotIn(Vec<String>),
 }
 
@@ -97,9 +96,8 @@ pub enum IpMatcher {
   Range(IpAddr, IpAddr),
 }
 
-
 impl RequestMatcher {
-  pub fn matches<B>(&self, target: &RequestInfo<'_, B>) -> bool { 
+  pub fn matches<B>(&self, target: &RequestInfo<'_, B>) -> bool {
     match self {
       RequestMatcher::All => true,
       RequestMatcher::Path(matcher) => matcher.matches(target.request.uri().path()),
@@ -108,25 +106,21 @@ impl RequestMatcher {
       RequestMatcher::Ip(matcher) => matcher.matches(target.remote_addr.ip()),
       RequestMatcher::BasicAuth(matcher) => matcher.matches(target.request.headers()),
       RequestMatcher::Not(matcher) => !matcher.matches(target),
-      RequestMatcher::Or(matchers) => {
-        matchers.iter().any(|matcher| matcher.matches(target))
-      }
-      RequestMatcher::And(matchers) => {
-        matchers.iter().all(|matcher| matcher.matches(target))
-      }
+      RequestMatcher::Or(matchers) => matchers.iter().any(|matcher| matcher.matches(target)),
+      RequestMatcher::And(matchers) => matchers.iter().all(|matcher| matcher.matches(target)),
     }
   }
 }
 
 impl PathMatcher {
-  pub fn matches(&self, path: &str) -> bool { 
+  pub fn matches(&self, path: &str) -> bool {
     match self {
       PathMatcher::All => true,
       PathMatcher::Exact(exact) => path == exact,
       PathMatcher::Scope(scope) => {
         if path == scope {
           true
-        } else if !scope.ends_with('/')  {
+        } else if !scope.ends_with('/') {
           if path.starts_with(scope) {
             path.as_bytes().get(scope.len()) == Some(&b'/')
           } else {
@@ -161,7 +155,7 @@ impl BasicAuthMatcher {
     };
     // this match is case insensitive
     const BASIC: &str = "basic ";
-    
+
     match auth.get(0..BASIC.len()) {
       None => return false,
       Some(leading) => {
@@ -188,7 +182,7 @@ impl BasicAuthMatcher {
       Ok(decoded) => decoded,
       Err(_) => return false,
     };
-    
+
     let sep_index = match decoded.find(':') {
       Some(sep_index) => sep_index,
       None => return false,
@@ -208,32 +202,25 @@ impl BasicAuthMatcher {
   }
 }
 
-
 impl HeaderMatcher {
   pub fn matches(&self, headers: &hyper::HeaderMap) -> bool {
     match self {
       HeaderMatcher::Exists(name) => headers.contains_key(name),
-      HeaderMatcher::Exact(name, value) => {
-        match headers.get(name) {
-          None => false,
-          Some(header) => header == value,
-        }
-      }
-      HeaderMatcher::ListContains(name, value) => {
-        match headers.get(name) {
-          None => false,
-          Some(header) => list_contains(header.as_bytes(), value.as_bytes()),
-        }
-      }
-      HeaderMatcher::Regex(name, regex) => {
-        match headers.get(name) {
-          None => false,
-          Some(header) => match header.to_str() {
-            Err(_) => false,
-            Ok(value) => regex.is_match(value),
-          }
-        }
-      }
+      HeaderMatcher::Exact(name, value) => match headers.get(name) {
+        None => false,
+        Some(header) => header == value,
+      },
+      HeaderMatcher::ListContains(name, value) => match headers.get(name) {
+        None => false,
+        Some(header) => list_contains(header.as_bytes(), value.as_bytes()),
+      },
+      HeaderMatcher::Regex(name, regex) => match headers.get(name) {
+        None => false,
+        Some(header) => match header.to_str() {
+          Err(_) => false,
+          Ok(value) => regex.is_match(value),
+        },
+      },
     }
   }
 }
@@ -243,12 +230,12 @@ impl MethodMatcher {
     match self {
       MethodMatcher::Ne(m) => !m.eq_ignore_ascii_case(method.as_str()),
       MethodMatcher::Eq(m) => m.eq_ignore_ascii_case(method.as_str()),
-      MethodMatcher::In(methods) => {
-        methods.iter().any(|m| m.eq_ignore_ascii_case(method.as_str()))
-      }
-      MethodMatcher::NotIn(methods) => {
-        methods.iter().all(|m| !m.eq_ignore_ascii_case(method.as_str()))
-      }
+      MethodMatcher::In(methods) => methods
+        .iter()
+        .any(|m| m.eq_ignore_ascii_case(method.as_str())),
+      MethodMatcher::NotIn(methods) => methods
+        .iter()
+        .all(|m| !m.eq_ignore_ascii_case(method.as_str())),
     }
   }
 }
@@ -271,7 +258,7 @@ mod test {
   mod not {
     use super::super::*;
 
-    #[test] 
+    #[test]
     fn all() {
       let matcher = RequestMatcher::All;
       let request = hyper::Request::builder().body(()).unwrap();
@@ -292,7 +279,8 @@ mod test {
       let matcher = RequestMatcher::Not(Box::new(RequestMatcher::All));
       assert!(!matcher.matches(&target));
 
-      let matcher = RequestMatcher::Not(Box::new(RequestMatcher::Not(Box::new(RequestMatcher::All))));
+      let matcher =
+        RequestMatcher::Not(Box::new(RequestMatcher::Not(Box::new(RequestMatcher::All))));
       assert!(matcher.matches(&target));
     }
   }
@@ -320,8 +308,8 @@ mod test {
       };
       let matcher = RequestMatcher::Or(vec![RequestMatcher::All]);
       assert!(matcher.matches(&target));
-      
-      let matcher = RequestMatcher::Or(vec![RequestMatcher::Not(Box::new(RequestMatcher::All))]);      
+
+      let matcher = RequestMatcher::Or(vec![RequestMatcher::Not(Box::new(RequestMatcher::All))]);
       assert!(!matcher.matches(&target));
     }
 
@@ -333,12 +321,8 @@ mod test {
         remote_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
       };
 
-      let matcher = RequestMatcher::Or(vec![
-        RequestMatcher::All,
-        RequestMatcher::All,
-      ]);
+      let matcher = RequestMatcher::Or(vec![RequestMatcher::All, RequestMatcher::All]);
       assert!(matcher.matches(&target));
-
 
       let matcher = RequestMatcher::Or(vec![
         RequestMatcher::All,
@@ -353,7 +337,6 @@ mod test {
       assert!(!matcher.matches(&target));
     }
   }
-
 
   mod and {
     use super::super::*;
@@ -378,8 +361,8 @@ mod test {
       };
       let matcher = RequestMatcher::And(vec![RequestMatcher::All]);
       assert!(matcher.matches(&target));
-      
-      let matcher = RequestMatcher::And(vec![RequestMatcher::Not(Box::new(RequestMatcher::All))]);      
+
+      let matcher = RequestMatcher::And(vec![RequestMatcher::Not(Box::new(RequestMatcher::All))]);
       assert!(!matcher.matches(&target));
     }
 
@@ -391,12 +374,8 @@ mod test {
         remote_addr: SocketAddr::from(([0, 0, 0, 0], 0)),
       };
 
-      let matcher = RequestMatcher::And(vec![
-        RequestMatcher::All,
-        RequestMatcher::All,
-      ]);
+      let matcher = RequestMatcher::And(vec![RequestMatcher::All, RequestMatcher::All]);
       assert!(matcher.matches(&target));
-
 
       let matcher = RequestMatcher::And(vec![
         RequestMatcher::All,
@@ -496,7 +475,7 @@ mod test {
       let mut headers = hyper::HeaderMap::new();
       headers.insert("x-real-ip", "127.0.0.1".parse().unwrap());
       assert!(matcher.matches(&headers));
-      
+
       let empty = hyper::HeaderMap::new();
       assert!(!matcher.matches(&empty))
     }
@@ -507,18 +486,21 @@ mod test {
       let mut headers = hyper::HeaderMap::new();
       headers.insert("x-real-ip", "127.0.0.1".parse().unwrap());
       assert!(matcher.matches(&headers));
-      
+
       let matcher = HeaderMatcher::Exact("x-real-ip".into(), "127.0.0.2".into());
       assert!(!matcher.matches(&headers))
     }
 
     #[test]
     fn match_regex() {
-      let matcher = HeaderMatcher::Regex("x-real-ip".into(), SRegex(Regex::new(r"^127\.0\.0\.1$").unwrap()));
+      let matcher = HeaderMatcher::Regex(
+        "x-real-ip".into(),
+        SRegex(Regex::new(r"^127\.0\.0\.1$").unwrap()),
+      );
       let mut headers = hyper::HeaderMap::new();
       headers.insert("x-real-ip", "127.0.0.1".parse().unwrap());
       assert!(matcher.matches(&headers));
-      
+
       let empty = hyper::HeaderMap::new();
       let matcher = HeaderMatcher::Regex("x-real-ip".into(), SRegex(Regex::new("^$").unwrap()));
       assert!(!matcher.matches(&empty))
@@ -528,14 +510,13 @@ mod test {
     fn match_list_contains() {
       let matcher = HeaderMatcher::ListContains("header".into(), "value2".into());
       let mut headers = hyper::HeaderMap::new();
-      headers.insert("header", "value1, value2, value3".parse().unwrap()); 
+      headers.insert("header", "value1, value2, value3".parse().unwrap());
       assert!(matcher.matches(&headers));
-      
+
       let matcher = HeaderMatcher::ListContains("header".into(), "value5".into());
       assert!(!matcher.matches(&headers))
     }
   }
-
 
   mod ip {
     use super::super::*;
@@ -546,7 +527,7 @@ mod test {
       let matcher = IpMatcher::Eq(IpAddr::from([127, 0, 0, 1]));
       assert!(matcher.matches(IpAddr::from([127, 0, 0, 1])));
       assert!(!matcher.matches(IpAddr::from([127, 0, 0, 2])));
-      
+
       // ip6
       let matcher = IpMatcher::Eq(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]));
       assert!(matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])));
@@ -559,7 +540,7 @@ mod test {
       let matcher = IpMatcher::Ne(IpAddr::from([127, 0, 0, 1]));
       assert!(!matcher.matches(IpAddr::from([127, 0, 0, 1])));
       assert!(matcher.matches(IpAddr::from([127, 0, 0, 2])));
-      
+
       // ip6
       let matcher = IpMatcher::Ne(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]));
       assert!(!matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])));
@@ -572,7 +553,7 @@ mod test {
       let matcher = IpMatcher::In(vec![IpAddr::from([127, 0, 0, 1])]);
       assert!(matcher.matches(IpAddr::from([127, 0, 0, 1])));
       assert!(!matcher.matches(IpAddr::from([127, 0, 0, 2])));
-      
+
       // ip6
       let matcher = IpMatcher::In(vec![IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])]);
       assert!(matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])));
@@ -585,7 +566,7 @@ mod test {
       let matcher = IpMatcher::NotIn(vec![IpAddr::from([127, 0, 0, 1])]);
       assert!(!matcher.matches(IpAddr::from([127, 0, 0, 1])));
       assert!(matcher.matches(IpAddr::from([127, 0, 0, 2])));
-      
+
       // ip6
       let matcher = IpMatcher::NotIn(vec![IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])]);
       assert!(!matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])));
@@ -599,9 +580,12 @@ mod test {
       assert!(matcher.matches(IpAddr::from([127, 0, 0, 1])));
       assert!(matcher.matches(IpAddr::from([127, 0, 0, 2])));
       assert!(!matcher.matches(IpAddr::from([127, 0, 0, 3])));
-    
+
       // ip6
-      let matcher = IpMatcher::Range(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]), IpAddr::from([0, 0, 0, 0, 0, 0, 0, 2]));
+      let matcher = IpMatcher::Range(
+        IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1]),
+        IpAddr::from([0, 0, 0, 0, 0, 0, 0, 2]),
+      );
       assert!(matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 1])));
       assert!(matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 2])));
       assert!(!matcher.matches(IpAddr::from([0, 0, 0, 0, 0, 0, 0, 3])));

@@ -33,6 +33,7 @@ use crate::body::{map_request_body, Body};
 use crate::client::pool::ProxyProtocolConfig;
 use crate::client::send_request;
 use crate::config::defaults::{
+  DEFAULT_COMPRESSION, DEFAULT_COMPRESSION_CONTENT_TYPES, DEFAULT_COMPRESSION_MIN_SIZE,
   DEFAULT_HTTP_BALANCE, DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_RETRIES,
   DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_HTTP_RETRY_BACKOFF,
   DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY, DEFAULT_STREAM_BALANCE,
@@ -312,47 +313,130 @@ pub async fn serve_proxy(
         #[cfg(feature = "serve-static")]
         HttpHandle::Static {
           base_dir,
+          index_files,
+          dot_files,
           response_headers,
         } => {
-          let path = match request.uri().path() {
-            "" | "/" => "",
-            path if path.starts_with('/') => &path[1..],
-            path => path,
-          };
-          let resolved = crate::serve_static::resolve(
-            base_dir,
-            path,
-            crate::serve_static::ServeStaticOptions {
-              index_file: Some("index.html"),
-              dotfiles: crate::serve_static::ServeStaticOptionsDotFiles::Error,
-            },
-          )
-          .await
-          .map_err(ProxyHttpError::ResolveStatic)?;
+          let mut response: Response<Body>;
 
-          use crate::serve_static::Resolved as R;
+          // OPTIONS handler, can be overriden with configuration
+          if request.method() == Method::OPTIONS {
+            response = Response::new(Body::empty());
+            // we prefer OK over NO_CONTENT as some browsers doesn't handle it very well
+            *response.status_mut() = StatusCode::OK;
 
-          let mut response = match resolved {
-            R::AppendSlash => {
-              let target = format!("{}/", request.uri().path());
-              let target = HeaderValue::try_from(target)
-                .map_err(ProxyHttpError::StaticAppendSlashInvalidRedirect)?;
+          // method not allowed
+          } else if request_method != Method::GET && request_method != Method::HEAD {
+            return Err(ProxyHttpError::StaticMethodNotAllowed);
 
-              let mut response = Response::new(Body::empty());
-              *response.status_mut() = StatusCode::FOUND;
-              response
-                .headers_mut()
-                .insert(hyper::header::LOCATION, target);
-              response
-            }
+          // serve
+          } else {
+            use crate::serve_static::resolve;
+            use crate::serve_static::DotFiles;
+            use crate::serve_static::ServeStaticOptions;
 
-            R::Serve { file, .. } => {
-              let body = crate::body::Body::file(file);
-              let mut response = Response::new(body);
-              *response.status_mut() = StatusCode::OK;
-              response
-            }
-          };
+            let path = match request.uri().path() {
+              "" | "/" => "",
+              path if path.starts_with('/') => &path[1..],
+              path => path,
+            };
+
+            let options = ServeStaticOptions {
+              index_files,
+              dot_files: dot_files.unwrap_or(DotFiles::Ignore),
+            };
+
+            let resolved = resolve(base_dir, path, request.headers(), options)
+              .await
+              .map_err(ProxyHttpError::ResolveStatic)?;
+
+            use crate::serve_static::Resolved as R;
+
+            response = match resolved {
+              R::AppendSlash => {
+                let target = format!("{}/", request.uri().path());
+                let target = HeaderValue::try_from(target)
+                  .map_err(ProxyHttpError::StaticAppendSlashInvalidRedirect)?;
+
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::FOUND;
+                response
+                  .headers_mut()
+                  .insert(hyper::header::LOCATION, target);
+                response
+              }
+
+              R::NotModfied => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::NOT_MODIFIED;
+                response
+              }
+
+              R::UnmodifiedPreconditionFailed => {
+                let mut response = Response::new(Body::empty());
+                *response.status_mut() = StatusCode::PRECONDITION_FAILED;
+                response
+              }
+
+              R::Serve { file, headers, .. } => {
+                let body = Body::file(file);
+
+                #[cfg(any(
+                  feature = "compression-br",
+                  feature = "compression-zstd",
+                  feature = "compression-gzip",
+                  feature = "compression-deflate"
+                ))]
+                {
+                  let compression = crate::option!(
+                    app.compression.as_deref(),
+                    config.http.compression.as_deref()
+                    => DEFAULT_COMPRESSION
+                  );
+
+                  let compression_content_types = crate::option!(
+                    app.compression_content_types.as_deref(),
+                    config.http.compression_content_types.as_deref()
+                    => DEFAULT_COMPRESSION_CONTENT_TYPES
+                  );
+
+                  let compression_min_size = crate::option!(
+                    app.compression_min_size,
+                    config.http.compression_min_size,
+                    => DEFAULT_COMPRESSION_MIN_SIZE
+                  );
+
+                  let (body, headers) = compress(
+                    compression,
+                    compression_content_types,
+                    compression_min_size,
+                    request.headers().get(hyper::header::ACCEPT_ENCODING),
+                    StatusCode::OK,
+                    body,
+                    headers,
+                  );
+
+                  let mut response = Response::new(body);
+                  *response.status_mut() = StatusCode::OK;
+                  *response.headers_mut() = headers;
+                  response
+                }
+
+                #[cfg(not(any(
+                  feature = "compression-br",
+                  feature = "compression-zstd",
+                  feature = "compression-gzip",
+                  feature = "compression-deflate"
+                )))]
+                {
+                  let mut response = Response::new(body);
+                  *response.status_mut() = StatusCode::OK;
+                  *response.headers_mut = headers;
+                  response
+                }
+              }
+            };
+          }
 
           response.headers_mut().insert(SERVER, SERVER_HEADER_VALUE);
           add_headers!(response.headers_mut(), config.http.response_headers);
@@ -1012,24 +1096,22 @@ pub async fn serve_proxy(
     Ok(response) => {
       use crate::log::{access_log, DisplayHeader, DisplayOption, DisplayPort};
       access_log!(
-                "HTTP {remote_addr} => {local_addr} | {method} {scheme}://{host}{port}{path} - {referer} - {user_agent} => {proxied_to} | {status} {status_text} - {content_length} - {ms}ms",
-                remote_addr = remote_addr,
-                local_addr = local_addr,
-                method = request_method,
-                scheme = if is_ssl { "https" } else { "http" },
-                host = host,
-                port = DisplayPort(port),
-                path = DisplayOption(request_uri.path_and_query()),
-                referer = DisplayHeader(request_referer.as_ref()),
-                user_agent = DisplayHeader(request_user_agent.as_ref()),
-                proxied_to = proxied_to.as_deref().unwrap_or("None"),
-                status = response.status().as_u16(),
-                status_text = response.status().canonical_reason().unwrap_or(""),
-                content_length = DisplayHeader(
-                    response.headers().get(hyper::header::CONTENT_LENGTH)
-                ),
-                ms = start.elapsed().as_millis()
-            );
+        "HTTP {remote_addr} => {local_addr} | {method} {scheme}://{host}{port}{path} - {referer} - {user_agent} => {proxied_to} | {status} {status_text} - {content_length} - {ms}ms",
+        remote_addr = remote_addr,
+        local_addr = local_addr,
+        method = request_method,
+        scheme = if is_ssl { "https" } else { "http" },
+        host = host,
+        port = DisplayPort(port),
+        path = DisplayOption(request_uri.path_and_query()),
+        referer = DisplayHeader(request_referer.as_ref()),
+        user_agent = DisplayHeader(request_user_agent.as_ref()),
+        proxied_to = proxied_to.as_deref().unwrap_or("None"),
+        status = response.status().as_u16(),
+        status_text = response.status().canonical_reason().unwrap_or(""),
+        content_length = DisplayHeader(response.headers().get(hyper::header::CONTENT_LENGTH)),
+        ms = start.elapsed().as_millis()
+      );
     }
 
     Err(e) => {

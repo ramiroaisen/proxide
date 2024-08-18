@@ -1,12 +1,23 @@
-use std::path::PathBuf;
+use headers::{
+  ContentLength, ContentType, HeaderMapExt, IfModifiedSince, IfUnmodifiedSince, LastModified,
+};
+use http::HeaderMap;
+use std::{os::unix::fs::MetadataExt, path::PathBuf, str::FromStr};
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Resolved {
   AppendSlash,
+  NotModfied,
+  UnmodifiedPreconditionFailed,
   Serve {
+    file: std::fs::File,
     path: PathBuf,
     metadata: std::fs::Metadata,
-    file: tokio::fs::File,
+    headers: hyper::HeaderMap,
   },
 }
 
@@ -84,14 +95,17 @@ impl ServeStaticError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServeStaticOptions<'a> {
-  pub index_file: Option<&'a str>,
-  pub dotfiles: ServeStaticOptionsDotFiles,
+  pub index_files: &'a [String],
+  pub dot_files: DotFiles,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ServeStaticOptionsDotFiles {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum DotFiles {
+  #[serde(rename = "ignore")]
   Ignore,
+  #[serde(rename = "allow")]
   Allow,
+  #[serde(rename = "error")]
   Error,
 }
 
@@ -99,12 +113,11 @@ pub enum ServeStaticOptionsDotFiles {
 pub async fn resolve(
   base_dir: &str,
   path: &str,
+  headers: &hyper::HeaderMap,
   options: ServeStaticOptions<'_>,
 ) -> Result<Resolved, ServeStaticError> {
   // remove leading slash
-  let base = tokio::fs::canonicalize(base_dir)
-    .await
-    .map_err(ServeStaticError::CanonicalizeBase)?;
+  let base = std::fs::canonicalize(base_dir).map_err(ServeStaticError::CanonicalizeBase)?;
 
   // dbg!(&base, path);
 
@@ -125,10 +138,10 @@ pub async fn resolve(
           let bytes = component.as_encoded_bytes();
           match bytes.first() {
             None => return Err(ServeStaticError::PathComponentEmpty),
-            Some(b'.') => match options.dotfiles {
-              ServeStaticOptionsDotFiles::Ignore => return Err(ServeStaticError::DotFilesIgnored),
-              ServeStaticOptionsDotFiles::Error => return Err(ServeStaticError::DotFilesError),
-              ServeStaticOptionsDotFiles::Allow => {}
+            Some(b'.') => match options.dot_files {
+              DotFiles::Ignore => return Err(ServeStaticError::DotFilesIgnored),
+              DotFiles::Error => return Err(ServeStaticError::DotFilesError),
+              DotFiles::Allow => {}
             },
             _ => {}
           }
@@ -136,9 +149,8 @@ pub async fn resolve(
       }
     }
 
-    let target = tokio::fs::canonicalize(base.join(target))
-      .await
-      .map_err(ServeStaticError::CanonicalizeTarget)?;
+    let target =
+      std::fs::canonicalize(base.join(target)).map_err(ServeStaticError::CanonicalizeTarget)?;
 
     // check if the target file is inside the base directory
     // else return an error
@@ -152,50 +164,53 @@ pub async fn resolve(
 
   // dbg!(&target);
 
-  let mut metadata = tokio::fs::metadata(&target)
-    .await
-    .map_err(ServeStaticError::Metadata)?;
+  let mut metadata = std::fs::metadata(&target).map_err(ServeStaticError::Metadata)?;
 
   let mut file_type = metadata.file_type();
 
   let mut is_index_file = false;
 
   if file_type.is_dir() {
-    let index_file = match options.index_file {
-      None => return Err(ServeStaticError::Directory),
-      Some(index_file) => index_file,
-    };
-
-    target.push(index_file);
-
-    target = tokio::fs::canonicalize(target)
-      .await
-      .map_err(ServeStaticError::IndexFileCanonicalizeTarget)?;
-
-    if !target.starts_with(&base) {
-      return Err(ServeStaticError::IndexFileOutsideBase);
+    if options.index_files.is_empty() {
+      return Err(ServeStaticError::Directory);
     }
 
-    metadata = tokio::fs::metadata(&target)
-      .await
-      .map_err(ServeStaticError::IndexFileMetadata)?;
+    for index_file in options.index_files {
+      target.push(index_file);
 
-    if metadata.is_dir() {
-      return Err(ServeStaticError::IndexFileDirectory);
+      target =
+        std::fs::canonicalize(target).map_err(ServeStaticError::IndexFileCanonicalizeTarget)?;
+
+      if !target.starts_with(&base) {
+        return Err(ServeStaticError::IndexFileOutsideBase);
+      }
+
+      metadata = std::fs::metadata(&target).map_err(ServeStaticError::IndexFileMetadata)?;
+
+      if !metadata.is_file() {
+        continue;
+      }
+
+      if !path.is_empty() && !path.ends_with('/') {
+        return Ok(Resolved::AppendSlash);
+      }
+
+      file_type = metadata.file_type();
+      is_index_file = true;
     }
-
-    if !path.is_empty() && !path.ends_with('/') {
-      return Ok(Resolved::AppendSlash);
-    }
-
-    file_type = metadata.file_type();
-
-    is_index_file = true;
   }
 
   // dbg!(&metadata);
 
   if !file_type.is_file() {
+    if file_type.is_dir() {
+      if !is_index_file {
+        return Err(ServeStaticError::Directory);
+      } else {
+        return Err(ServeStaticError::IndexFileDirectory);
+      }
+    }
+
     if !is_index_file {
       return Err(ServeStaticError::NotAFile);
     } else {
@@ -203,10 +218,40 @@ pub async fn resolve(
     }
   }
 
-  let file = tokio::fs::OpenOptions::new()
+  if let Ok(meta_modified) = metadata.modified() {
+    if let Some(if_modified_since) = headers.typed_get::<IfModifiedSince>() {
+      if !if_modified_since.is_modified(meta_modified) {
+        return Ok(Resolved::NotModfied);
+      }
+    }
+
+    if let Some(if_unmodified_since) = headers.typed_get::<IfUnmodifiedSince>() {
+      if !if_unmodified_since.precondition_passes(meta_modified) {
+        return Ok(Resolved::UnmodifiedPreconditionFailed);
+      }
+    }
+  }
+
+  let mut headers = HeaderMap::new();
+
+  // content length
+  headers.typed_insert(ContentLength(metadata.size()));
+
+  // content type
+  let mime = mime_guess::from_path(&target).first();
+  if let Some(mime) = mime {
+    headers.typed_insert(ContentType::from_str(mime.as_ref()).unwrap());
+  } else {
+    headers.typed_insert(ContentType::octet_stream())
+  }
+
+  if let Ok(meta_modified) = metadata.modified() {
+    headers.typed_insert(LastModified::from(meta_modified));
+  }
+
+  let file = std::fs::OpenOptions::new()
     .read(true)
     .open(&target)
-    .await
     .map_err(|e| {
       if is_index_file {
         ServeStaticError::IndexFileOpen(e)
@@ -217,6 +262,7 @@ pub async fn resolve(
 
   let resolved = Resolved::Serve {
     path: target,
+    headers,
     metadata,
     file,
   };

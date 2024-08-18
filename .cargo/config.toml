@@ -8,5 +8,8 @@ opt-level = 3
 codegen-units = 1
 panic = "abort"
 
+[unstable]
+build-std = ["core", "alloc", "std", "panic_abort"]
+
 [test]
 rustflags = ["--cfg", "tokio_unstable"]

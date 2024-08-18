@@ -36,6 +36,7 @@ use crate::serde::url::{HttpUpstreamBaseUrl, StreamUpstreamOrigin};
 
 #[allow(unused)]
 use crate::serde::content_type::ContentTypeMatcher;
+use crate::serve_static::DotFiles;
 
 pub mod listen;
 pub mod matcher;
@@ -725,6 +726,9 @@ pub enum HttpHandle {
   #[serde(rename = "static")]
   Static {
     base_dir: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    index_files: Vec<String>,
+    dot_files: Option<DotFiles>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     response_headers: ResponseHeaders,
   },
