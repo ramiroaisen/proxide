@@ -119,13 +119,7 @@ pub mod defaults {
     "application/json",
     "application/javascript",
     "application/xml",
-    "image/svg+xml",
     "application/x-javascript",
-    "application/manifest+json",
-    "application/vnd.api+json",
-    "application/xhtml+xml",
-    "application/rss+xml",
-    "application/atom+xml",
     "application/vnd.ms-fontobject",
     "application/x-font-ttf",
     "application/x-font-opentype",
@@ -136,6 +130,9 @@ pub mod defaults {
     "font/otf",
     "font/eot",
     "font/opentype",
+    "application/wasm",
+    "*/*+json",
+    "*/*+xml",
   );
 
   #[cfg(any(
@@ -729,6 +726,7 @@ pub enum HttpHandle {
     base_dir: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     index_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     dot_files: Option<DotFiles>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     response_headers: ResponseHeaders,

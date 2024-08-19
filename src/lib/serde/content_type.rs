@@ -10,6 +10,9 @@ pub enum ContentTypeMatcher {
   Type(Cow<'static, str>),
   // matches a full type eg: application/json
   Full(Cow<'static, str>),
+  // matches the +plus sign at the end of a type,  eg: (+xml) image/svg+xml
+  // the str must not contain the plus sign
+  Plus(Cow<'static, str>),
 }
 
 json_schema_as!(ContentTypeMatcher => String);
@@ -20,6 +23,9 @@ impl ContentTypeMatcher {
     if const_str::ends_with!(v, "/*") {
       let str = const_str::unwrap!(const_str::strip_suffix!(v, "/*"));
       Self::Type(Cow::Borrowed(str))
+    } else if const_str::starts_with!(v, "*/*+") {
+      let str = const_str::unwrap!(const_str::strip_prefix!(v, "*/*+"));
+      Self::Plus(Cow::Borrowed(str))
     } else {
       Self::Full(Cow::Borrowed(v))
     }
@@ -30,12 +36,26 @@ impl ContentTypeMatcher {
 
     match self {
       Self::Type(self_ty) => match content_type.get(0..self_ty.len()) {
-        None => false,
         Some(content_type_ty) => match content_type.get(self_ty.len()) {
           Some(b'/') => content_type_ty.eq_ignore_ascii_case(self_ty.as_bytes()),
           _ => false,
         },
+        _ => false,
       },
+
+      Self::Plus(plus_ty) => {
+        let part: &[u8] = trim(content_type.split(|c| *c == b';').next().unwrap());
+        match part.get((part.len() - plus_ty.len() - 1)..) {
+          Some(slice) => match slice.first() {
+            Some(b'+') => match slice.get(1..) {
+              Some(slice) => slice.eq_ignore_ascii_case(plus_ty.as_bytes()),
+              _ => false,
+            },
+            _ => false,
+          },
+          _ => false,
+        }
+      }
 
       Self::Full(full_ty) => match content_type.get(0..full_ty.len()) {
         None => false,
@@ -52,8 +72,10 @@ impl<T: AsRef<str>> From<T> for ContentTypeMatcher {
   fn from(value: T) -> Self {
     let str = value.as_ref().trim();
 
-    if str.ends_with("/*") {
-      Self::Type(str[0..str.len() - 2].trim().to_string().into())
+    if str.starts_with("*/*+") {
+      Self::Plus(str[4..str.len()].to_string().into())
+    } else if str.ends_with("/*") {
+      Self::Type(str[0..str.len() - 2].to_string().into())
     } else {
       Self::Full(str.to_string().into())
     }
@@ -65,6 +87,7 @@ impl Display for ContentTypeMatcher {
     match self {
       ContentTypeMatcher::Type(value) => write!(f, "{value}/*"),
       ContentTypeMatcher::Full(value) => write!(f, "{}", value),
+      ContentTypeMatcher::Plus(value) => write!(f, "*/*+{}", value),
     }
   }
 }
@@ -97,6 +120,8 @@ mod test {
       ("text/* ", "text/*"),
       (" text/*", "text/*"),
       (" text/* ", "text/*"),
+      (" */*+xml ", "*/*+xml"),
+      (" */*+json ", "*/*+json"),
     ];
 
     for (source, expected) in cases {
@@ -117,6 +142,8 @@ mod test {
       ("text/* ", "text/*"),
       (" text/*", "text/*"),
       (" text/* ", "text/*"),
+      (" */*+xml ", "*/*+xml"),
+      (" */*+json ", "*/*+json"),
     ];
 
     for (source, expected) in cases {
@@ -139,6 +166,8 @@ mod test {
       (" application/json ", C::Full("application/json".into())),
       ("image/png ", C::Full("image/png".into())),
       (" video/mp4 ", C::Full("video/mp4".into())),
+      (" */*+xml ", C::Plus("xml".into())),
+      (" */*+json ", C::Plus("json".into())),
     ];
 
     for (source, expected) in cases {
@@ -159,6 +188,8 @@ mod test {
       ("text/*", "text/plain;charset=utf-8", true),
       ("text/*", "application/json", false),
       ("text/*", "application/json;charset=utf-8", false),
+      ("*/*+json", "application/webmanifest+json", true),
+      ("*/*+xml", "image/svg+xml", true),
     ];
 
     for (matcher, content_type, expected) in cases {
@@ -180,6 +211,7 @@ mod test {
         ContentTypeMatcher::Full("application/json".into()),
       ),
       ("text/*", ContentTypeMatcher::Type("text".into())),
+      ("*/*+xml", ContentTypeMatcher::Plus("xml".into())),
     ];
 
     for (source, expected) in cases {
