@@ -1,8 +1,6 @@
 #![allow(clippy::declare_interior_mutable_const)] // silence const headers warning
 #![allow(non_camel_case_types)] // silence #[dynamic] warning
 #![allow(non_upper_case_globals)] // silence #[dynamic] warning
-use headers::{AcceptRanges, ContentLength, ContentRange, HeaderMapExt};
-use http::header::ALLOW;
 use http::Uri;
 use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderName, HeaderValue, CONNECTION, CONTENT_TYPE, HOST, SERVER};
@@ -324,6 +322,9 @@ pub async fn serve_proxy(
           dot_files,
           response_headers,
         } => {
+          use headers::{AcceptRanges, ContentLength, ContentRange, HeaderMapExt};
+          use http::header::ALLOW;
+
           let mut response: Response<Body>;
 
           // OPTIONS handler, can be overriden with configuration
@@ -397,7 +398,7 @@ pub async fn serve_proxy(
               R::Serve {
                 mut file,
                 range,
-                mut headers,
+                headers,
                 metadata,
                 ..
               } => {
@@ -459,9 +460,10 @@ pub async fn serve_proxy(
                       // we do not compress range responses
                       let mut response = Response::new(body);
                       *response.status_mut() = StatusCode::PARTIAL_CONTENT;
-                      headers.typed_insert(content_length);
-                      headers.typed_insert(content_range);
                       *response.headers_mut() = headers;
+                      response.headers_mut().typed_insert(content_length);
+                      response.headers_mut().typed_insert(content_range);
+
                       response
                     }
 
@@ -484,6 +486,7 @@ pub async fn serve_proxy(
                         => crate::config::defaults::DEFAULT_COMPRESSION_MIN_SIZE
                       );
 
+                      let mut headers = headers;
                       headers.typed_insert(content_length);
 
                       let (body, headers) = compress(
@@ -525,7 +528,7 @@ pub async fn serve_proxy(
                       let mut response = Response::new(body);
                       *response.status_mut() = StatusCode::OK;
                       *response.headers_mut() = headers;
-                      response_headers_mut().typed_insert(content_length);
+                      response.headers_mut().typed_insert(content_length);
                       response
                     }
                   }
