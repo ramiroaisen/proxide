@@ -30,9 +30,10 @@ use crate::{
 };
 
 #[cfg(feature = "proctitle")]
-const PROCTITLE: &str = "proxide";
-#[cfg(feature = "proctitle")]
-const PROCTITLE_SHUTDOWN: &str = "proxide - graceful shutdown";
+crate::group!(
+  const PROCTITLE: &str = "proxide";
+  const PROCTITLE_SHUTDOWN: &str = "proxide - graceful shutdown";
+);
 
 /// This function will create a [tokio] runtime and call [start] within it. \
 /// the tokio runtime can be configured with command line arguments and env variables. \

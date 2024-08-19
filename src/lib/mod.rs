@@ -14,6 +14,7 @@ pub mod proxy;
 pub mod proxy_protocol;
 pub mod serde;
 pub mod serve;
+#[cfg(feature = "serve-static")]
 pub mod serve_static;
 pub mod service;
 #[cfg(feature = "stats")]

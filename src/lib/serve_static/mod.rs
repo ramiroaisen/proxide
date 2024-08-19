@@ -1,11 +1,61 @@
 use headers::{
-  ContentType, HeaderMapExt, IfModifiedSince, IfRange, IfUnmodifiedSince, LastModified, Range,
+  AcceptRanges, ContentLength, ContentRange, ContentType, HeaderMapExt, IfModifiedSince, IfRange,
+  IfUnmodifiedSince, LastModified, Range,
 };
-use http::HeaderMap;
-use std::{ops::Bound, path::PathBuf, str::FromStr};
+use http::{HeaderMap, StatusCode};
+use http_body::Frame;
+use std::{
+  fs::File,
+  io::{Read, Seek, Take},
+  ops::Bound,
+  path::PathBuf,
+  str::FromStr,
+};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::{body::Body, proxy::error::ProxyHttpError};
+
+// copied from static-web-server
+#[cfg(unix)]
+pub(crate) fn get_optimal_buf_size(metadata: &std::fs::Metadata, len: u64) -> usize {
+  use std::os::unix::fs::MetadataExt;
+  // If file length is smaller than block size,
+  // don't waste space reserving a bigger-than-needed buffer.
+  std::cmp::min(
+    std::cmp::max(metadata.blksize() as usize, 1024 * 4),
+    len as usize,
+  )
+}
+
+// copied from static-web-server
+#[cfg(not(unix))]
+fn get_optimal_buf_size(_metadata: &std::fs::Metadata, len: u64) -> usize {
+  std::cmp::min(1024 * 8, len)
+}
+
+fn create_body<R: std::io::Read + Send + Sync + 'static>(mut read: R, buf_size: usize) -> Body {
+  use bytes::BytesMut;
+  // use bytes::Bytes;
+  // let mut buf = [0; 1024 * 4];
+  let stream = async_stream::try_stream! {
+    loop {
+      let mut buf = BytesMut::zeroed(buf_size);
+      let n = read.read(&mut buf).map_err(ProxyHttpError::FileRead)?;
+      if n == 0 {
+        break;
+      } else {
+        // let chunk = Bytes::copy_from_slice(&buf[..n]);
+        // yield Frame::data(chunk);
+        buf.truncate(n);
+        yield Frame::data(buf.freeze());
+      }
+    }
+  };
+
+  Body::stream(stream)
+}
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -15,11 +65,12 @@ pub enum Resolved {
   UnmodifiedPreconditionFailed,
   RangeNotSatisfiable,
   Serve {
-    file: std::fs::File,
     range: Option<(Bound<u64>, Bound<u64>)>,
     path: PathBuf,
     metadata: std::fs::Metadata,
+    status: StatusCode,
     headers: hyper::HeaderMap,
+    body: Body,
   },
 }
 
@@ -65,6 +116,8 @@ pub enum ServeStaticError {
   OutsideBase,
   #[error("index file outside base directory")]
   IndexFileOutsideBase,
+  #[error("file seek error: {0}")]
+  FileSeek(#[source] std::io::Error),
 }
 
 impl ServeStaticError {
@@ -92,6 +145,7 @@ impl ServeStaticError {
       E::IndexFileMetadata(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::Open(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::IndexFileOpen(e) => e.kind() == std::io::ErrorKind::NotFound,
+      E::FileSeek(_) => false,
     }
   }
 }
@@ -167,7 +221,7 @@ pub async fn resolve(
 
   let mut metadata = std::fs::metadata(&target).map_err(ServeStaticError::Metadata)?;
 
-  let file: std::fs::File;
+  let mut file: std::fs::File;
 
   'resolve: {
     if metadata.is_dir() {
@@ -283,12 +337,63 @@ pub async fn resolve(
     headers.typed_insert(LastModified::from(meta_modified));
   }
 
+  let len: u64;
+  let status: StatusCode;
+  let content_range: Option<ContentRange>;
+  // we always use take to avoid dynamic dispatch even when there's nothing to take
+  // also if the file length increase afterwise, the content-length header will be wrong
+  let reader: Take<File>;
+
+  match range {
+    Some((start_bound, end_bound)) => {
+      let start = match start_bound {
+        Bound::Included(start) => start,
+        Bound::Excluded(start) => start + 1,
+        Bound::Unbounded => 0,
+      };
+
+      let end = match end_bound {
+        Bound::Included(end) => end + 1,
+        Bound::Excluded(end) => end,
+        Bound::Unbounded => metadata.len(),
+      };
+
+      len = end - start;
+      status = StatusCode::PARTIAL_CONTENT;
+      content_range = Some(ContentRange::bytes(start..end, metadata.len()).unwrap());
+
+      if start != 0 {
+        file
+          .seek(std::io::SeekFrom::Start(start))
+          .map_err(ServeStaticError::FileSeek)?;
+      }
+
+      reader = file.take(len);
+    }
+
+    None => {
+      status = StatusCode::OK;
+      len = metadata.len();
+      content_range = None;
+      reader = file.take(len);
+    }
+  };
+
+  headers.typed_insert(AcceptRanges::bytes());
+  headers.typed_insert(ContentLength(len));
+  if let Some(content_range) = content_range {
+    headers.typed_insert(content_range);
+  }
+
+  let body = create_body(reader, get_optimal_buf_size(&metadata, len));
+
   let resolved = Resolved::Serve {
     path: target,
     range,
-    headers,
     metadata,
-    file,
+    status,
+    headers,
+    body,
   };
 
   Ok(resolved)

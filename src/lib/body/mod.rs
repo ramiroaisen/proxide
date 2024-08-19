@@ -6,17 +6,10 @@ use http_body::SizeHint;
 use hyper::body::Body as HyperBody;
 use hyper::body::Incoming;
 use pin_project::{pin_project, pinned_drop};
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
-
-#[cfg(feature = "serve-static")]
-use bytes::BytesMut;
-#[cfg(feature = "serve-static")]
-use std::io::Read;
-
-#[cfg(feature = "serve-static")]
-const READ_BUF_SIZE: usize = 1024 * 4;
 
 use crate::proxy::error::ProxyHttpError;
 
@@ -29,8 +22,19 @@ pub enum BodyKind {
   Full(Option<Bytes>),
   Incoming(#[pin] Incoming),
   Stream(FrameStream),
-  #[cfg(feature = "serve-static")]
-  Read(Box<dyn std::io::Read + Send + Sync + 'static>),
+}
+
+impl Debug for BodyKind {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let name = match self {
+      BodyKind::Empty => "BodyKind::Empty",
+      BodyKind::Full(_) => "BodyKind::Full",
+      BodyKind::Incoming(_) => "BodyKind::Incoming",
+      BodyKind::Stream(_) => "BodyKind::Stream",
+    };
+
+    f.debug_struct(name).finish()
+  }
 }
 
 #[pin_project(PinnedDrop)]
@@ -38,6 +42,12 @@ pub struct Body {
   #[pin]
   pub(crate) kind: BodyKind,
   pub(crate) on_drop: Vec<Box<dyn FnOnce() + Send + Sync + 'static>>,
+}
+
+impl Debug for Body {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Body").field("kind", &self.kind).finish()
+  }
 }
 
 #[pinned_drop]
@@ -80,14 +90,6 @@ impl Body {
     }
   }
 
-  #[cfg(feature = "serve-static")]
-  pub fn read<R: Into<Box<dyn std::io::Read + Send + Sync + 'static>>>(read: R) -> Self {
-    Self {
-      kind: BodyKind::read(read),
-      on_drop: vec![],
-    }
-  }
-
   pub fn channel() -> (Self, spsc::Sender<Result<Frame<Bytes>, ProxyHttpError>>) {
     let (kind, sender) = BodyKind::channel();
     let body = Self {
@@ -122,12 +124,6 @@ impl BodyKind {
     Self::Stream(Box::pin(stream))
   }
 
-  #[cfg(feature = "serve-static")]
-  pub fn read<R: Into<Box<dyn std::io::Read + Send + Sync + 'static>>>(read: R) -> Self {
-    #[cfg(feature = "serve-static")]
-    Self::Read(read.into())
-  }
-
   // kanal channel is not Sync
   pub fn channel() -> (Self, spsc::Sender<Result<Frame<Bytes>, ProxyHttpError>>) {
     let (sender, receiver) = spsc::channel();
@@ -157,20 +153,6 @@ impl HyperBody for BodyKind {
         Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProxyHttpError::IncomingBody(e)))),
       },
       BodyKindProjection::Stream(stream) => stream.as_mut().poll_next(cx),
-      #[cfg(feature = "serve-static")]
-      BodyKindProjection::Read(read) => {
-        // let mut buf = [const { MaybeUninit::<u8>::uninit() }; FILE_READ_BUF_SIZE];
-        // let mut read_buf = tokio::io::ReadBuf::uninit(&mut buf[..]);
-        let mut buf = BytesMut::zeroed(READ_BUF_SIZE);
-        match read.read(&mut buf) {
-          Ok(0) => Poll::Ready(None),
-          Ok(n) => {
-            buf.truncate(n);
-            Poll::Ready(Some(Ok(Frame::data(buf.freeze()))))
-          }
-          Err(e) => Poll::Ready(Some(Err(ProxyHttpError::FileRead(e)))),
-        }
-      }
     }
   }
 
@@ -181,8 +163,6 @@ impl HyperBody for BodyKind {
       BodyKind::Incoming(incoming) => incoming.is_end_stream(),
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not be trusted to be correct
       BodyKind::Stream(_) => false,
-      #[cfg(feature = "serve-static")]
-      BodyKind::Read(_) => false,
     }
   }
 
@@ -196,8 +176,6 @@ impl HyperBody for BodyKind {
       BodyKind::Incoming(incoming) => incoming.size_hint(),
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not trusted to be correct
       BodyKind::Stream(_) => SizeHint::default(),
-      #[cfg(feature = "serve-static")]
-      BodyKind::Read(_) => SizeHint::default(),
     }
   }
 }
@@ -225,8 +203,6 @@ impl Stream for BodyKind {
         }
       }
       BodyKind::Stream(stream) => stream.size_hint(),
-      #[cfg(feature = "serve-static")]
-      BodyKind::Read(_) => (0, None),
     }
   }
 }

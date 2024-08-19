@@ -456,6 +456,7 @@ pub struct HttpApp {
   pub listen: Vec<Listen>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_names: Option<Vec<ServerName>>,
+
   #[cfg(any(
     feature = "compression-br",
     feature = "compression-zstd",

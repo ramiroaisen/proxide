@@ -94,3 +94,12 @@ macro_rules! option {
     $crate::option!(@timeout $head, $($tail),*).unwrap_or_else(|| $default)
   };
 }
+
+/// This macro is used to group multiple declarations without a block
+/// Eg: for applying a cfg attribute to several items at once
+#[macro_export]
+macro_rules! group {
+  ($($tt:tt)*) => {
+    $($tt)*
+  }
+}
