@@ -162,9 +162,9 @@ impl ServeStaticError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServeStaticOptions<'a> {
-  pub follow_symlinks: bool,
-  pub dot_files: DotFiles,
   pub index_files: &'a [String],
+  pub dot_files: DotFiles,
+  pub follow_symlinks: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -231,14 +231,6 @@ pub async fn resolve(
         return Err(ServeStaticError::Symlink);
       }
 
-      let mut parent = target.parent();
-      while let Some(current) = parent {
-        if current.is_symlink() {
-          return Err(ServeStaticError::Symlink);
-        }
-        parent = current.parent();
-      }
-
       metadata
     }
   };
@@ -250,18 +242,18 @@ pub async fn resolve(
       for index_file in options.index_files {
         let index_target = target.join(index_file);
 
-        let index_metadata = match options.follow_symlinks {
-          true => match index_target.metadata() {
-            Ok(index_metadata) => index_metadata,
-            Err(e) => {
-              if e.kind() == std::io::ErrorKind::NotFound {
-                continue;
+        let index_metadata = {
+          if options.follow_symlinks {
+            match index_target.metadata() {
+              Ok(index_metadata) => index_metadata,
+              Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                  continue;
+                }
+                return Err(ServeStaticError::IndexFileMetadata(e));
               }
-              return Err(ServeStaticError::IndexFileMetadata(e));
             }
-          },
-
-          false => {
+          } else {
             let index_metadata = match index_target.symlink_metadata() {
               Ok(index_metadata) => index_metadata,
               Err(e) => {
@@ -298,8 +290,28 @@ pub async fn resolve(
         break 'resolve;
       }
 
+      if !options.follow_symlinks {
+        let mut parent = target.parent();
+        while let Some(current) = parent {
+          if current.is_symlink() {
+            return Err(ServeStaticError::Symlink);
+          }
+          parent = current.parent();
+        }
+      }
+
       return Err(ServeStaticError::Directory);
     } else {
+      if !options.follow_symlinks {
+        let mut parent = target.parent();
+        while let Some(current) = parent {
+          if current.is_symlink() {
+            return Err(ServeStaticError::Symlink);
+          }
+          parent = current.parent();
+        }
+      }
+
       if !metadata.is_file() {
         return Err(ServeStaticError::NotAFile);
       }
@@ -423,6 +435,10 @@ pub async fn resolve(
   }
 
   let body = create_body(reader, get_optimal_buf_size(&metadata, len));
+
+  if options.follow_symlinks {
+    target = std::fs::canonicalize(target).map_err(ServeStaticError::CanonicalizeTarget)?;
+  }
 
   let resolved = Resolved::Serve {
     path: target,
