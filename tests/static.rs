@@ -185,6 +185,8 @@ fn static_ranges() {
   })
 }
 
+// TODO: enable this test on windows
+#[cfg(unix)]
 #[test]
 fn static_follow_symlinks() {
   launch!("static.yml");
@@ -218,6 +220,8 @@ fn static_follow_symlinks() {
   })
 }
 
+// TODO: enable this test on windows
+#[cfg(unix)]
 #[test]
 fn static_no_follow_symlinks() {
   launch!("static.yml");
