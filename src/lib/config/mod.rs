@@ -142,15 +142,15 @@ pub mod defaults {
     feature = "compression-deflate"
   ))]
   pub const DEFAULT_COMPRESSION: &[Compress] = &[
-    #[cfg(feature = "compression-zstd")]
-    Compress {
-      algo: Encoding::Zstd,
-      level: 1,
-    },
     #[cfg(feature = "compression-br")]
     Compress {
       algo: Encoding::Br,
-      level: 1,
+      level: 3,
+    },
+    #[cfg(feature = "compression-zstd")]
+    Compress {
+      algo: Encoding::Zstd,
+      level: 3,
     },
     #[cfg(feature = "compression-gzip")]
     Compress {
@@ -729,8 +729,37 @@ pub enum HttpHandle {
     index_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dot_files: Option<DotFiles>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    follow_symlinks: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     response_headers: ResponseHeaders,
+
+    #[cfg(any(
+      feature = "compression-br",
+      feature = "compression-zstd",
+      feature = "compression-gzip",
+      feature = "compression-deflate"
+    ))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compression: Option<Vec<Compress>>,
+
+    #[cfg(any(
+      feature = "compression-br",
+      feature = "compression-zstd",
+      feature = "compression-gzip",
+      feature = "compression-deflate"
+    ))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compression_content_types: Option<Vec<ContentTypeMatcher>>,
+
+    #[cfg(any(
+      feature = "compression-br",
+      feature = "compression-zstd",
+      feature = "compression-gzip",
+      feature = "compression-deflate"
+    ))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    compression_min_size: Option<u64>,
   },
 
   #[serde(rename = "proxy")]

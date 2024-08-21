@@ -46,7 +46,7 @@ fn static_dotfiles() {
           .body(Body::empty())
           .unwrap();
 
-        sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(25)).await;
         let res = send(req).await.unwrap();
         let (parts, body) = res.into_parts();
 
@@ -181,6 +181,66 @@ fn static_ranges() {
         log::info!("{path} {range:?} -> {expected}");
         assert_eq!(body, expected);
       }
+    }
+  })
+}
+
+#[test]
+fn static_follow_symlinks() {
+  launch!("static.yml");
+
+  block_on(async move {
+    let cases = [
+      ("/symlink-file.txt", "0123456789"),
+      ("/dir/symlink-index.html", "/dir/index.html"),
+      ("/symlink-dir/index.html", "/dir/index.html"),
+    ];
+
+    for (path, expected) in cases {
+      let req = hyper::Request::builder()
+        .method("GET")
+        .header("x-follow-symlinks", "true")
+        .uri(format!("http://127.0.0.1:15300{path}"))
+        .body(Body::empty())
+        .unwrap();
+
+      let res = send(req).await.unwrap();
+      assert_status!(res, OK);
+      assert_header!(res, "x-test-static", "follow-symlinks");
+      assert_header!(res, "x-test", "static");
+
+      let body =
+        String::from_utf8_lossy(&res.into_body().collect().await.unwrap().to_bytes()).to_string();
+
+      log::info!("{path} -> {expected}");
+      assert_eq!(body, expected);
+    }
+  })
+}
+
+#[test]
+fn static_no_follow_symlinks() {
+  launch!("static.yml");
+
+  block_on(async move {
+    let cases = [
+      "/symlink-file.txt",
+      "/dir/symlink-index.html",
+      "/symlink-dir/index.html",
+    ];
+
+    for path in cases {
+      let req = hyper::Request::builder()
+        .method("GET")
+        .header("x-follow-symlinks", "false")
+        .uri(format!("http://127.0.0.1:15300{path}"))
+        .body(Body::empty())
+        .unwrap();
+
+      let res = send(req).await.unwrap();
+      assert_status!(res, NOT_FOUND);
+      // assert_header!(res, "x-test-static", "follow-symlinks");
+      // assert_header!(res, "x-test", "static");
     }
   })
 }

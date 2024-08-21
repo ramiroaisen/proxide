@@ -5,6 +5,7 @@ use headers::{
 use http::{HeaderMap, StatusCode};
 use http_body::Frame;
 use std::{
+  env::current_dir,
   fs::File,
   io::{Read, Seek, Take},
   ops::Bound,
@@ -32,7 +33,7 @@ pub(crate) fn get_optimal_buf_size(metadata: &std::fs::Metadata, len: u64) -> us
 // copied from static-web-server
 #[cfg(not(unix))]
 fn get_optimal_buf_size(_metadata: &std::fs::Metadata, len: u64) -> usize {
-  std::cmp::min(1024 * 8, len)
+  std::cmp::min(1024 * 8, len as usize)
 }
 
 fn create_body<R: std::io::Read + Send + Sync + 'static>(mut read: R, buf_size: usize) -> Body {
@@ -106,16 +107,20 @@ pub enum ServeStaticError {
   IndexFileCanonicalizeTarget(#[source] std::io::Error),
   #[error("metadata error: {0}")]
   Metadata(#[source] std::io::Error),
+  #[error("symlink metadata error: {0}")]
+  SymlinkMetadata(#[source] std::io::Error),
   #[error("metadata index file error: {0}")]
   IndexFileMetadata(#[source] std::io::Error),
+  #[error("symlink metadata index file error: {0}")]
+  IndexFileSymlinkMetadata(#[source] std::io::Error),
   #[error("open file error: {0}")]
   Open(#[source] std::io::Error),
   #[error("index file open error: {0}")]
   IndexFileOpen(#[source] std::io::Error),
-  #[error("file outside base directory")]
-  OutsideBase,
-  #[error("index file outside base directory")]
-  IndexFileOutsideBase,
+  #[error("file or parent is symlink")]
+  Symlink,
+  #[error("index file is symlink")]
+  IndexFileSymlink,
   #[error("file seek error: {0}")]
   FileSeek(#[source] std::io::Error),
 }
@@ -130,18 +135,23 @@ impl ServeStaticError {
       E::PathComponentParentDir => false,
       E::PathComponentEmpty => false,
       E::DotFilesError => false,
-      E::Directory => false,
-      E::IndexFileDirectory => false,
-      E::NotAFile => false,
-      E::IndexFileNotAFile => false,
-      E::OutsideBase => false,
-      E::IndexFileOutsideBase => false,
+
+      E::Directory => true,
+      E::IndexFileDirectory => true,
       E::DotFilesIgnored => true,
+      E::Symlink => true,
+      E::IndexFileSymlink => true,
+
+      E::NotAFile => true,
+      E::IndexFileNotAFile => true,
+
+      E::Metadata(e) => e.kind() == std::io::ErrorKind::NotFound,
+      E::SymlinkMetadata(e) => e.kind() == std::io::ErrorKind::NotFound,
+      E::IndexFileSymlinkMetadata(e) => e.kind() == std::io::ErrorKind::NotFound,
 
       E::CanonicalizeBase(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::CanonicalizeTarget(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::IndexFileCanonicalizeTarget(e) => e.kind() == std::io::ErrorKind::NotFound,
-      E::Metadata(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::IndexFileMetadata(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::Open(e) => e.kind() == std::io::ErrorKind::NotFound,
       E::IndexFileOpen(e) => e.kind() == std::io::ErrorKind::NotFound,
@@ -152,8 +162,9 @@ impl ServeStaticError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ServeStaticOptions<'a> {
-  pub index_files: &'a [String],
+  pub follow_symlinks: bool,
   pub dot_files: DotFiles,
+  pub index_files: &'a [String],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -173,12 +184,7 @@ pub async fn resolve(
   request_headers: &hyper::HeaderMap,
   options: ServeStaticOptions<'_>,
 ) -> Result<Resolved, ServeStaticError> {
-  // remove leading slash
-  let base = std::fs::canonicalize(base_dir).map_err(ServeStaticError::CanonicalizeBase)?;
-
-  let mut target = if path.is_empty() {
-    base.clone()
-  } else {
+  if !path.is_empty() {
     let target = PathBuf::from(path);
     for component in target.components() {
       use std::path::Component as C;
@@ -203,45 +209,76 @@ pub async fn resolve(
         }
       }
     }
+  }
 
-    let target =
-      std::fs::canonicalize(base.join(target)).map_err(ServeStaticError::CanonicalizeTarget)?;
-
-    // check if the target file is inside the base directory
-    // else return an error
-    if !target.starts_with(&base) {
-      // dbg!(&base, &target, "base outside target");
-      return Err(ServeStaticError::OutsideBase);
+  let mut target = {
+    if path.is_empty() {
+      current_dir().unwrap().join(base_dir)
+    } else {
+      current_dir().unwrap().join(base_dir).join(path)
     }
-
-    target
   };
 
-  // dbg!(&target);
+  let mut metadata = {
+    if options.follow_symlinks {
+      target.metadata().map_err(ServeStaticError::Metadata)?
+    } else {
+      let metadata = target
+        .symlink_metadata()
+        .map_err(ServeStaticError::SymlinkMetadata)?;
 
-  let mut metadata = std::fs::metadata(&target).map_err(ServeStaticError::Metadata)?;
+      if metadata.is_symlink() {
+        return Err(ServeStaticError::Symlink);
+      }
+
+      let mut parent = target.parent();
+      while let Some(current) = parent {
+        if current.is_symlink() {
+          return Err(ServeStaticError::Symlink);
+        }
+        parent = current.parent();
+      }
+
+      metadata
+    }
+  };
 
   let mut file: std::fs::File;
 
   'resolve: {
     if metadata.is_dir() {
       for index_file in options.index_files {
-        let index_target = match std::fs::canonicalize(target.join(index_file)) {
-          Ok(index_target) => index_target,
-          Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-              continue;
+        let index_target = target.join(index_file);
+
+        let index_metadata = match options.follow_symlinks {
+          true => match index_target.metadata() {
+            Ok(index_metadata) => index_metadata,
+            Err(e) => {
+              if e.kind() == std::io::ErrorKind::NotFound {
+                continue;
+              }
+              return Err(ServeStaticError::IndexFileMetadata(e));
             }
-            return Err(ServeStaticError::IndexFileCanonicalizeTarget(e));
+          },
+
+          false => {
+            let index_metadata = match index_target.symlink_metadata() {
+              Ok(index_metadata) => index_metadata,
+              Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                  continue;
+                }
+                return Err(ServeStaticError::IndexFileSymlinkMetadata(e));
+              }
+            };
+
+            if index_metadata.is_symlink() {
+              return Err(ServeStaticError::IndexFileSymlink);
+            }
+
+            index_metadata
           }
         };
-
-        if !index_target.starts_with(base) {
-          return Err(ServeStaticError::IndexFileOutsideBase);
-        }
-
-        let index_metadata =
-          std::fs::metadata(&index_target).map_err(ServeStaticError::Metadata)?;
 
         if !index_metadata.is_file() {
           return Err(ServeStaticError::IndexFileNotAFile);

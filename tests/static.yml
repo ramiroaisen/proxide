@@ -31,6 +31,26 @@ http:
             response_headers:
               - [ x-test, static ]
 
+        - match:
+            header: { exact: [ x-follow-symlinks, "true" ] }
+          static:
+            base_dir: ./tests/static
+            index_files: [ index.html, index.txt ]
+            follow_symlinks: true
+            response_headers:
+              - [ x-test, static ]
+              - [ x-test-static, follow-symlinks ]
+
+        - match:
+            header: { exact: [ x-follow-symlinks, "false" ] }
+          static:
+            base_dir: ./tests/static
+            index_files: [ index.html, index.txt ]
+            follow_symlinks: false
+            response_headers:
+              - [ x-test, static ]
+              - [ x-test-static, no-follow-symlinks ]
+
         - match: all
           static:
             base_dir: ./tests/static

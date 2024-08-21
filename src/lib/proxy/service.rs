@@ -315,7 +315,11 @@ pub async fn serve_proxy(
           base_dir,
           index_files,
           dot_files,
+          follow_symlinks,
           response_headers,
+          compression,
+          compression_content_types,
+          compression_min_size,
         } => {
           use http::header::ALLOW;
 
@@ -349,6 +353,7 @@ pub async fn serve_proxy(
             let options = ServeStaticOptions {
               index_files,
               dot_files: dot_files.unwrap_or(DotFiles::Ignore),
+              follow_symlinks: follow_symlinks.unwrap_or(false),
             };
 
             let resolved = resolve(base_dir, path, request.headers(), options)
@@ -406,18 +411,21 @@ pub async fn serve_proxy(
                 crate::group!(
 
                 let compression = crate::option!(
+                  compression.as_deref(),
                   app.compression.as_deref(),
-                  config.http.compression.as_deref()
+                  config.http.compression.as_deref(),
                   => crate::config::defaults::DEFAULT_COMPRESSION
                 );
 
                 let compression_content_types = crate::option!(
+                  compression_content_types.as_deref(),
                   app.compression_content_types.as_deref(),
-                  config.http.compression_content_types.as_deref()
+                  config.http.compression_content_types.as_deref(),
                   => crate::config::defaults::DEFAULT_COMPRESSION_CONTENT_TYPES
                 );
 
                 let compression_min_size = crate::option!(
+                  *compression_min_size,
                   app.compression_min_size,
                   config.http.compression_min_size,
                   => crate::config::defaults::DEFAULT_COMPRESSION_MIN_SIZE
