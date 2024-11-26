@@ -14,6 +14,10 @@ http:
   apps:
     - listen:
         - addr: 25200
+        - addr: 25443
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
       proxy:
         upstream:
           - base_url: http://127.0.0.1:%HTTP_PORT%

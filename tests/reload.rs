@@ -4,6 +4,7 @@ use clap::Parser;
 use common::{block_on, dir};
 use http::{header::CONNECTION, HeaderValue};
 use proxide::cli::{self, args::Args};
+use reqwest::ClientBuilder;
 
 #[test]
 fn reload() {
@@ -122,13 +123,19 @@ fn reload() {
       cli::run(args).unwrap();
     });
 
-    let client = reqwest::Client::new();
+    let client = ClientBuilder::new()
+      .danger_accept_invalid_certs(true)
+      .build()
+      .unwrap();
 
-    for i in 0..1000 {
-      let port = if i % 2 == 0 { 25100 } else { 25200 };
-      let backend = if i % 2 == 0 { "stream-1" } else { "http-1" };
+    for i in 0..1500 {
+      let (scheme, port, backend) = match i % 3 {
+        0 => ("http", 25200, "http-1"),
+        1 => ("https", 25443, "http-1"),
+        _ => ("http", 25100, "stream-1"),
+      };
       let res = client
-        .get(&format!("http://127.0.0.1:{port}"))
+        .get(&format!("{scheme}://127.0.0.1:{port}"))
         .send()
         .await
         .unwrap();
@@ -150,11 +157,14 @@ fn reload() {
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    for i in 0..1000 {
-      let port = if i % 2 == 0 { 25100 } else { 25200 };
-      let backend = if i % 2 == 0 { "stream-2" } else { "http-2" };
+    for i in 0..1500 {
+      let (scheme, port, backend) = match i % 3 {
+        0 => ("http", 25200, "http-2"),
+        1 => ("https", 25443, "http-2"),
+        _ => ("http", 25100, "stream-2"),
+      };
       let res = client
-        .get(&format!("http://127.0.0.1:{port}"))
+        .get(&format!("{scheme}://127.0.0.1:{port}"))
         .send()
         .await
         .unwrap();
