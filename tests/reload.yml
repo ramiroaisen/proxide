@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=../config.schema.json
+
+pidfile: "%PIDFILE%"
+
+stream:
+  apps:
+    - listen:
+        - addr: 25100
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:%STREAM_PORT%
+
+http:
+  apps:
+    - listen:
+        - addr: 25200
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:%HTTP_PORT%
