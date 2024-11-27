@@ -1,5 +1,3 @@
-use common::https_get;
-
 mod common;
 
 #[test]
@@ -16,11 +14,22 @@ fn stream() {
           _ => unreachable!(),
         };
 
-        let res = https_get(&format!("{front_scheme}://127.0.0.1:{port}/")).await.unwrap();
-        
-        assert_status!(res, OK);
-        assert_header!(res, "x-scheme", upstream_scheme);
+        let client = reqwest::Client::builder()
+          .danger_accept_invalid_certs(true)
+          .build()
+          .unwrap();
+
+        for _ in 0..1000 {
+          let res = client
+            .get(&format!("{front_scheme}://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+
+          assert_status!(res, OK);
+          assert_header!(res, "x-scheme", upstream_scheme);
+        }
       }
     }
-})
+  })
 }

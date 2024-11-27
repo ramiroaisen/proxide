@@ -25,7 +25,7 @@ use crate::{
   net::bind,
   proxy::{self, health::upstream_healthcheck_task, service::ProxyStreamService},
   proxy_protocol::ExpectProxyProtocol,
-  serve::{serve_http, serve_https, serve_ssl_with_config, serve_tcp},
+  serve::{serve_http, serve_https, serve_ssl, serve_tcp},
   tls::{cert_resolver::CertResolver, crypto, load_certs, load_private_key},
 };
 
@@ -748,7 +748,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
       async move {
         if let Ok(()) = wait_start.changed().await {
           log::info!("starting stream ssl server at {}", addr);
-          serve_ssl_with_config(
+          serve_ssl(
             addr,
             tcp,
             expect_proxy_protocol,

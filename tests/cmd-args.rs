@@ -75,12 +75,12 @@ fn cmd_args() {
     "runtime-args-test",
   ];
 
-  let args: proxide::cli::args::Args = proxide::cli::args::Args::try_parse_from(args).unwrap();
+  let args = proxide::cli::args::Args::try_parse_from(args).unwrap();
   std::thread::spawn(move || {
     proxide::cli::run(args).unwrap();
   });
 
-  std::thread::sleep(std::time::Duration::from_millis(50));
+  std::thread::sleep(std::time::Duration::from_millis(200));
 
   block_on(async move {
     let res = get("http://127.0.0.1:23700").await.unwrap();
@@ -129,7 +129,7 @@ fn cmd_args() {
     proxide::cli::run(args).unwrap();
   });
 
-  std::thread::sleep(std::time::Duration::from_millis(50));
+  std::thread::sleep(std::time::Duration::from_millis(200));
 
   block_on(async move {
     let res = get("http://127.0.0.1:23700").await.unwrap();

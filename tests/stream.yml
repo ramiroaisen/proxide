@@ -8,6 +8,7 @@ stream:
       proxy:
         upstream:
           - origin: tcp://127.0.0.1:21250
+            send_proxy_protocol: v1
 
     # tcp - ssl
     - listen:
@@ -15,6 +16,7 @@ stream:
       proxy:
         upstream:
           - origin: ssl://127.0.0.1:21251
+            send_proxy_protocol: v1
             danger_accept_invalid_certs: true
 
     # ssl - tcp
@@ -26,6 +28,8 @@ stream:
       proxy:
         upstream:
           - origin: tcp://127.0.0.1:21250
+            send_proxy_protocol: v1
+
 
     # ssl - ssl
     - listen:
@@ -36,13 +40,17 @@ stream:
       proxy:
         upstream:
           - origin: ssl://127.0.0.1:21251
+            send_proxy_protocol: v1
             danger_accept_invalid_certs: true
 
 http:
   apps: 
     - listen:
         - addr: 21250
+          expect_proxy_protocol: v1
+          
         - addr: 21251
+          expect_proxy_protocol: v1
           ssl:
             cert: cert/self-signed-cert.pem
             key: cert/self-signed-key.pem

@@ -236,6 +236,8 @@ pub async fn serve_http<M, S, B, Sig>(
           }
         };
       }
+
+      drop(tcp);
     }
   };
 
@@ -382,6 +384,8 @@ pub async fn serve_https<M, S, B, Sig>(
           }
         }
       }
+
+      drop(tcp);
     }
   };
 
@@ -452,60 +456,67 @@ pub async fn serve_tcp<S, Sig>(
 
   let graceful = crate::graceful::GracefulShutdown::new();
 
-  loop {
-    tokio::select! {
-      accept = tcp.accept() => {
-        let (stream, remote_addr) = match accept {
-          Ok(accept) => accept,
-          Err(e) => {
-            log::error!("error accepting tcp stream in tcp mode - sleeping for 1 second: {e}");
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            continue;
-          }
-        };
-
-        macro_rules! serve {
-          ($stream:expr, $proxy_header:expr) => {{
-            let fut = service.serve(Connection { stream: $stream, proxy_header: $proxy_header, remote_addr, local_addr, is_ssl: false });
-
-            let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Tcp);
-            let guard = connection_start(connection);
-
-             tokio::spawn(async move {
-              if let Err(e) = fut.await {
-                log::warn!("error handling tcp connection - {e}: {e:?}");
-              }
-              drop(guard);
-            });
-          }}
-        }
-
-        let mut graceful_stream = graceful.guard(stream);
-        match expect_proxy_protocol {
-          None => serve!(graceful_stream, None),
-          Some(version) => {
-            let header = match crate::proxy_protocol::read(&mut graceful_stream, version).timeout(proxy_protocol_read_timeout).await {
-              Ok(Ok(header)) => header,
-              Ok(Err(e)) => {
-                log::warn!("error reading proxy protocol header(2): {e}");
-                continue;
-              }
-              Err(_) => {
-                log::warn!("error reading proxy protocol(2): timeout after {proxy_protocol_read_timeout:?}");
+  {
+    let graceful = graceful.clone();
+    async move {
+      loop {
+        tokio::select! {
+          accept = tcp.accept() => {
+            let (stream, remote_addr) = match accept {
+              Ok(accept) => accept,
+              Err(e) => {
+                log::error!("error accepting tcp stream in tcp mode - sleeping for 1 second: {e}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
               }
             };
 
-            serve!(graceful_stream, Some(header))
+            macro_rules! serve {
+              ($stream:expr, $proxy_header:expr) => {{
+                let fut = service.serve(Connection { stream: $stream, proxy_header: $proxy_header, remote_addr, local_addr, is_ssl: false });
+
+                let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Tcp);
+                let guard = connection_start(connection);
+
+                tokio::spawn(async move {
+                  if let Err(e) = fut.await {
+                    log::warn!("error handling tcp connection - {e}: {e:?}");
+                  }
+                  drop(guard);
+                });
+              }}
+            }
+
+            let mut graceful_stream = graceful.guard(stream);
+            match expect_proxy_protocol {
+              None => serve!(graceful_stream, None),
+              Some(version) => {
+                let header = match crate::proxy_protocol::read(&mut graceful_stream, version).timeout(proxy_protocol_read_timeout).await {
+                  Ok(Ok(header)) => header,
+                  Ok(Err(e)) => {
+                    log::warn!("error reading proxy protocol header(2): {e}");
+                    continue;
+                  }
+                  Err(_) => {
+                    log::warn!("error reading proxy protocol(2): timeout after {proxy_protocol_read_timeout:?}");
+                    continue;
+                  }
+                };
+
+                serve!(graceful_stream, Some(header))
+              }
+            }
+          }
+
+          _ = &mut signal => {
+            break;
           }
         }
       }
 
-      _ = &mut signal => {
-        break;
-      }
-    }
-  }
+      drop(tcp);
+    }.await;
+  };
 
   if let Some(timeout) = graceful_shutdown_timeout {
     if graceful.shutdown().timeout(timeout).await.is_err() {
@@ -521,7 +532,7 @@ pub async fn serve_tcp<S, Sig>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn serve_ssl_with_config<S, Sig>(
+pub async fn serve_ssl<S, Sig>(
   local_addr: SocketAddr,
   tcp: TcpListener,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
@@ -590,6 +601,8 @@ pub async fn serve_ssl_with_config<S, Sig>(
         _ = &mut signal => break,
       }
     }
+
+    drop(tcp);
   };
 
   let handle_task = async move {
