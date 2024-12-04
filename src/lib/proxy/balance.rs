@@ -78,7 +78,6 @@ pub fn balance_sort<'a, U: BalanceTarget>(
           };
 
           iter
-            .into_iter()
             .filter_map(|idx| upstreams.get(idx))
             .collect::<Vec<_>>()
 
