@@ -1,6 +1,5 @@
 use std::{
   net::IpAddr,
-  num::NonZeroU32,
   sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -12,8 +11,6 @@ use crate::{
 pub trait BalanceTarget {
   fn is_active(&self) -> bool;
   fn open_connections(&self) -> usize;
-  fn key(&self) -> &[u8];
-  fn weight(&self) -> NonZeroU32;
 }
 
 #[inline(always)]
@@ -106,15 +103,6 @@ impl BalanceTarget for HttpUpstream {
       .state_open_connections
       .load(std::sync::atomic::Ordering::Relaxed)
   }
-
-  fn key(&self) -> &[u8] {
-    // TODO: is there a better key function we can use?
-    self.base_url.as_str().as_bytes()
-  }
-
-  fn weight(&self) -> NonZeroU32 {
-    self.weight.unwrap_or(NonZeroU32::new(1).unwrap())
-  }
 }
 
 impl BalanceTarget for StreamUpstream {
@@ -126,14 +114,5 @@ impl BalanceTarget for StreamUpstream {
     self
       .state_open_connections
       .load(std::sync::atomic::Ordering::Relaxed)
-  }
-
-  fn key(&self) -> &[u8] {
-    // TODO: is there a better key function we can use?
-    self.origin.as_str().as_bytes()
-  }
-
-  fn weight(&self) -> NonZeroU32 {
-    self.weight.unwrap_or(NonZeroU32::new(1).unwrap())
   }
 }
