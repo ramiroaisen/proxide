@@ -8,6 +8,8 @@ use http::{header::CONNECTION, HeaderValue};
 use proxide::cli::{self, args::Args};
 use reqwest::ClientBuilder;
 
+// windows doesn't support signals
+#[cfg(not(target_os = "windows"))]
 #[test]
 fn reload() {
   block_on(async move {
