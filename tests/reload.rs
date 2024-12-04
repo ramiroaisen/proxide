@@ -1,4 +1,6 @@
 mod common;
+use std::time::Duration;
+
 use axum::{body::Body, response::Response};
 use clap::Parser;
 use common::{block_on, dir};
@@ -123,6 +125,8 @@ fn reload() {
       cli::run(args).unwrap();
     });
 
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
     let client = ClientBuilder::new()
       .danger_accept_invalid_certs(true)
       .build()
@@ -155,7 +159,7 @@ fn reload() {
     .unwrap();
     cli::run(args).unwrap();
 
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
 
     for i in 0..1500 {
       let (scheme, port, backend) = match i % 3 {
