@@ -1,7 +1,11 @@
 use std::{
   net::IpAddr,
+  num::NonZeroU32,
   sync::atomic::{AtomicUsize, Ordering},
 };
+
+use itertools::Itertools;
+use nonzero::nonzero;
 
 use crate::{
   config::{Balance, HttpUpstream, StreamUpstream},
@@ -11,6 +15,7 @@ use crate::{
 pub trait BalanceTarget {
   fn is_active(&self) -> bool;
   fn open_connections(&self) -> usize;
+  fn weight(&self) -> NonZeroU32;
 }
 
 #[inline(always)]
@@ -35,10 +40,31 @@ pub fn balance_sort<'a, U: BalanceTarget>(
         }
 
         Balance::Random => {
+          // we calculate the greatest common divisor of the weights to avoid extra allocations
+          let divisor = {
+            let mut divisor = nonzero!(1u32);
+            for up in upstreams {
+              divisor = gcd::euclid_nonzero_u32(divisor, up.weight());
+            }
+            divisor
+          };
+
           use rand::prelude::SliceRandom;
-          let mut vec = upstreams.iter().collect::<Vec<_>>();
+          let mut vec = upstreams
+            .iter()
+            .enumerate()
+            .flat_map(|(i, up)| {
+              std::iter::repeat(i).take(up.weight().get() as usize / divisor.get() as usize)
+            })
+            .collect::<Vec<_>>();
+
           vec.shuffle(&mut rand::thread_rng());
+
           vec
+            .into_iter()
+            .dedup()
+            .filter_map(|i| upstreams.get(i))
+            .collect::<Vec<_>>()
         }
 
         Balance::IpHash => {
@@ -103,6 +129,10 @@ impl BalanceTarget for HttpUpstream {
       .state_open_connections
       .load(std::sync::atomic::Ordering::Relaxed)
   }
+
+  fn weight(&self) -> NonZeroU32 {
+    self.weight.unwrap_or(nonzero!(1u32))
+  }
 }
 
 impl BalanceTarget for StreamUpstream {
@@ -114,5 +144,9 @@ impl BalanceTarget for StreamUpstream {
     self
       .state_open_connections
       .load(std::sync::atomic::Ordering::Relaxed)
+  }
+
+  fn weight(&self) -> NonZeroU32 {
+    self.weight.unwrap_or(nonzero!(1u32))
   }
 }
