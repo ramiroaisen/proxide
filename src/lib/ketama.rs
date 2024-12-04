@@ -1,6 +1,5 @@
+use itertools::Itertools;
 use std::{hash::Hasher, num::NonZeroU32};
-
-use indexmap::IndexSet;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Ketama {
@@ -57,22 +56,36 @@ impl Ketama {
     }
   }
 
-  pub fn list_for_key(&self, key: &[u8]) -> IndexSet<usize> {
+  pub fn list_for_key<'a>(&'a self, key: &[u8]) -> impl Iterator<Item = usize> + Send + Sync + 'a {
     let start = match self.idx(key) {
       Some(start) => start,
-      None => return IndexSet::new(),
+      None => return KetamaNodeIter::Empty,
     };
 
-    let mut set = IndexSet::new();
-    for (_, idx) in self
+    let iter = self
       .ring
       .iter()
       .skip(start)
       .chain(self.ring.iter().take(start))
-    {
-      set.insert(*idx);
-    }
+      .map(|(_, idx)| *idx)
+      .dedup();
 
-    set
+    KetamaNodeIter::Pass(iter)
+  }
+}
+
+pub enum KetamaNodeIter<T> {
+  Empty,
+  Pass(T),
+}
+
+impl<Item, I: Iterator<Item = Item>> Iterator for KetamaNodeIter<I> {
+  type Item = Item;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    match self {
+      KetamaNodeIter::Empty => None,
+      KetamaNodeIter::Pass(iter) => iter.next(),
+    }
   }
 }
