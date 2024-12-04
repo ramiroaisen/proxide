@@ -47,6 +47,7 @@ use crate::config::{
 };
 #[cfg(feature = "interpolation")]
 use crate::context::Interpolation;
+use crate::ketama::Ketama;
 use crate::net::timeout::TimeoutIo;
 use crate::proxy::balance::balance_sort;
 use crate::proxy::error::ProxyHttpError;
@@ -232,6 +233,7 @@ pub async fn serve_proxy(
       .cloned();
 
     let handle_balance: Option<Balance>;
+    let handle_ketama: Option<&Ketama>;
     let handle_retries: Option<usize>;
     let handle_retry_backoff: Option<BackOff>;
     let handle_proxy_headers: &ProxyHeaders;
@@ -515,6 +517,7 @@ pub async fn serve_proxy(
 
         HttpHandle::Proxy {
           balance,
+          ketama,
           upstream,
           retries,
           retry_backoff,
@@ -527,6 +530,7 @@ pub async fn serve_proxy(
           proxy_tcp_nodelay,
         } => {
           handle_balance = *balance;
+          handle_ketama = ketama.as_ref();
           upstreams = upstream;
           handle_retries = *retries;
           handle_retry_backoff = *retry_backoff;
@@ -611,6 +615,7 @@ pub async fn serve_proxy(
       let sorted_upstreams = balance_sort(
         upstreams,
         balance,
+        handle_ketama,
         remote_addr.ip(),
         handle_state_round_robin_index,
       );
@@ -1173,6 +1178,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
   let (
     upstreams,
     handle_balance,
+    handle_ketama,
     handle_stream_retries,
     handle_stream_retry_backoff,
     handle_proxy_protocol_write_timeout,
@@ -1184,6 +1190,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
     StreamHandle::Proxy {
       balance,
       upstream,
+      ketama,
       retries: stream_retries,
       retry_backoff: stream_retry_backoff,
       proxy_protocol_write_timeout,
@@ -1194,6 +1201,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
     } => (
       upstream,
       *balance,
+      ketama.as_ref(),
       *stream_retries,
       *stream_retry_backoff,
       *proxy_protocol_write_timeout,
@@ -1246,8 +1254,13 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       tokio::time::sleep(backoff.duration_for(i - 1)).await;
     }
 
-    let sorted_upstreams =
-      crate::proxy::balance::balance_sort(upstreams, balance, remote_addr.ip(), round_robin_index);
+    let sorted_upstreams = crate::proxy::balance::balance_sort(
+      upstreams,
+      balance,
+      handle_ketama,
+      remote_addr.ip(),
+      round_robin_index,
+    );
 
     'upstreams: for upstream in sorted_upstreams {
       match upstream.origin.scheme() {

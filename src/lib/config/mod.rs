@@ -1,3 +1,4 @@
+use std::num::NonZeroU32;
 use std::str::FromStr;
 #[cfg(feature = "stats")]
 use std::sync::atomic::AtomicU64;
@@ -11,7 +12,7 @@ use matcher::RequestMatcher;
 use schemars::gen::{SchemaGenerator, SchemaSettings};
 use schemars::schema::RootSchema;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use server_name::ServerName;
 
 use crate::backoff::BackOff;
@@ -23,6 +24,7 @@ use crate::backoff::BackOff;
 ))]
 use crate::compression::Encoding;
 
+use crate::ketama::{Bucket, Ketama};
 use crate::log::logfile::LogFileConfig;
 use crate::log::LevelFilter;
 #[cfg(feature = "interpolation")]
@@ -547,6 +549,10 @@ pub enum Balance {
 #[serde(deny_unknown_fields)]
 pub struct HttpUpstream {
   pub base_url: HttpUpstreamBaseUrl,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub weight: Option<NonZeroU32>,
+
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub sni: Option<Sni>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -633,6 +639,9 @@ pub struct StreamUpstream {
   pub origin: StreamUpstreamOrigin,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub weight: Option<NonZeroU32>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub sni: Option<Sni>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -671,13 +680,18 @@ pub struct StreamUpstream {
   pub stats_total_connections: Arc<AtomicU64>,
 }
 
+// The serde(remote = "Self") is a trick to run a function after deserialization
+// happens to intialize the Ketama ring
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[serde(remote = "Self")]
 pub enum StreamHandle {
   #[serde(rename = "proxy")]
   Proxy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     balance: Option<Balance>,
+    #[serde(default, skip)]
+    ketama: Option<Ketama>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retries: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -697,8 +711,49 @@ pub enum StreamHandle {
   },
 }
 
+impl StreamHandle {
+  // this will initialize the ketama
+  fn initialize(&mut self) {
+    #[allow(clippy::single_match)]
+    match self {
+      StreamHandle::Proxy {
+        ketama, upstream, ..
+      } => {
+        let _ = ketama.insert(Ketama::from_buckets(upstream.iter().enumerate().map(
+          |(i, upstream)| {
+            let key = i.to_le_bytes();
+            let weight = upstream.weight.unwrap_or(NonZeroU32::new(1).unwrap());
+            Bucket {
+              key,
+              node: i,
+              weight,
+            }
+          },
+        )));
+      }
+    };
+  }
+}
+
+impl Serialize for StreamHandle {
+  fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+    StreamHandle::serialize(self, ser)
+  }
+}
+
+impl<'de> Deserialize<'de> for StreamHandle {
+  fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+    let mut v = StreamHandle::deserialize(de)?;
+    v.initialize();
+    Ok(v)
+  }
+}
+
+// The serde(remote = "Self") is a trick to run a function after deserialization
+// happens to intialize the Ketama ring
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[serde(remote = "Self")]
 pub enum HttpHandle {
   #[serde(rename = "return")]
   Return {
@@ -766,6 +821,8 @@ pub enum HttpHandle {
   Proxy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     balance: Option<Balance>,
+    #[serde(default, skip)]
+    ketama: Option<Ketama>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retries: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -789,6 +846,45 @@ pub enum HttpHandle {
 
   #[serde(rename = "when")]
   When(Vec<HttpMatcher>),
+}
+
+impl HttpHandle {
+  // this will initialize the ketama
+  fn initialize(&mut self) {
+    #[allow(clippy::single_match)]
+    match self {
+      HttpHandle::Proxy {
+        ketama, upstream, ..
+      } => {
+        let _ = ketama.insert(Ketama::from_buckets(upstream.iter().enumerate().map(
+          |(i, upstream)| {
+            let key = i.to_le_bytes();
+            let weight = upstream.weight.unwrap_or(NonZeroU32::new(1).unwrap());
+            Bucket {
+              key,
+              node: i,
+              weight,
+            }
+          },
+        )));
+      }
+      _ => {}
+    };
+  }
+}
+
+impl Serialize for HttpHandle {
+  fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+    HttpHandle::serialize(self, ser)
+  }
+}
+
+impl<'de> Deserialize<'de> for HttpHandle {
+  fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+    let mut v = HttpHandle::deserialize(de)?;
+    v.initialize();
+    Ok(v)
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -1836,6 +1836,7 @@ dependencies = [
  "clap",
  "console-subscriber",
  "const-str",
+ "crc32fast",
  "defer",
  "derivative",
  "futures",
