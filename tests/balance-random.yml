@@ -10,6 +10,16 @@ stream:
           - origin: tcp://127.0.0.1:20450
           - origin: tcp://127.0.0.1:20451
 
+    - listen:
+        - addr: 20402
+      proxy:
+        balance: random
+        upstream:
+          - origin: tcp://127.0.0.1:20450
+            weight: 75
+          - origin: tcp://127.0.0.1:20451
+            weight: 25
+
 http:
   apps:
     - listen:
@@ -19,6 +29,16 @@ http:
         upstream:
           - base_url: http://127.0.0.1:20450
           - base_url: http://127.0.0.1:20451
+
+    - listen:
+      - addr: 20403
+      proxy:
+        balance: random
+        upstream:
+          - base_url: http://127.0.0.1:20450
+            weight: 75
+          - base_url: http://127.0.0.1:20451
+            weight: 25
 
     - listen:
         - addr: 20450
@@ -35,3 +55,5 @@ http:
         response_headers:
           - [ content-type, text/plain ]
           - [ x-upstream, "1" ]
+
+
