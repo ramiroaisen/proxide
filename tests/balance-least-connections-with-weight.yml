@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=../config.schema.json
+
+stream:
+  apps:
+
+    - listen:
+        - addr: 6601
+      proxy:
+        balance: least-connections
+        upstream:
+          - origin: tcp://127.0.0.1:6660
+            weight: 1
+          - origin: tcp://127.0.0.1:6661
+            weight: 2
+          - origin: tcp://127.0.0.1:6662
+            weight: 3
+          - origin: tcp://127.0.0.1:6663
+            weight: 4
+
+http:
+  apps:
+
+    - listen:
+        - addr: 6600
+      proxy:
+        balance: least-connections
+        upstream:
+          - base_url: http://127.0.0.1:6650
+            weight: 1
+          - base_url: http://127.0.0.1:6651
+            weight: 2
+          - base_url: http://127.0.0.1:6652
+            weight: 3
+          - base_url: http://127.0.0.1:6653
+            weight: 4

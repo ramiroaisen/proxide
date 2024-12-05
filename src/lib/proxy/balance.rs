@@ -97,15 +97,24 @@ pub fn balance_sort<'a, U: BalanceTarget>(
             .iter()
             .map(|upstream| {
               let conns = upstream.open_connections();
-              (upstream, conns)
+              let weight = upstream.weight();
+              let weighted = conns as f64 / weight.get() as f64;
+              // we also take in account the weight absolute number
+              // two weighted numbers would be equal to 0 with 0 connections but different weights
+              (upstream, weighted, weight)
             })
             .collect::<Vec<_>>();
 
-          with_count.sort_by(|(_, n1), (_, n2)| n1.cmp(n2));
+          with_count.sort_by(|(_, weighted1, weight1), (_, weighted2, weight2)| {
+            match weighted1.partial_cmp(weighted2) {
+              None | Some(std::cmp::Ordering::Equal) => weight2.cmp(weight1),
+              Some(other) => other,
+            }
+          });
 
           with_count
             .into_iter()
-            .map(|(upstream, _)| upstream)
+            .map(|(upstream, _, _)| upstream)
             .collect::<Vec<_>>()
         }
       };

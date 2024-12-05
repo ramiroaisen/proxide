@@ -13,8 +13,8 @@ use std::{
 use tokio::net::TcpListener;
 
 #[test]
-fn balance_least_connections() {
-  launch!("balance-least-connections.yml");
+fn balance_least_connections_with_weight() {
+  launch!("balance-least-connections-with-weight.yml");
 
   block_on(async move {
     for p in [0, 1] {
@@ -32,7 +32,7 @@ fn balance_least_connections() {
       // servers
       for i in 0..4 {
         let (s0, s1, s2, s3) = (s0.clone(), s1.clone(), s2.clone(), s3.clone());
-        let server = TcpListener::bind(format!("127.0.0.1:206{d}{i}", d = 5 + p))
+        let server = TcpListener::bind(format!("127.0.0.1:66{d}{i}", d = 5 + p))
           .await
           .unwrap();
 
@@ -68,24 +68,22 @@ fn balance_least_connections() {
       tokio::time::sleep(Duration::from_millis(100)).await;
 
       // clients
-      for _ in 1..=10 {
-        for _ in 1..=4 {
-          tokio::time::sleep(Duration::from_millis(100)).await;
-          let mut ws = ws(&format!("ws://127.0.0.1:2060{p}/")).await.unwrap();
-          ws.send(Message::Text(String::from("hello"))).await.unwrap();
-          tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(120_000)).await;
-            drop(ws);
-          });
-        }
+      for _ in 1..=100 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut ws = ws(&format!("ws://127.0.0.1:660{p}/")).await.unwrap();
+        ws.send(Message::Text(String::from("hello"))).await.unwrap();
+        tokio::spawn(async move {
+          tokio::time::sleep(Duration::from_millis(120_000)).await;
+          drop(ws);
+        });
       }
 
       thread::sleep(Duration::from_millis(100));
 
       macro_rules! check {
-        ($e:ident) => {
+        ($e:ident, $n:expr) => {
           let v = $e.load(Ordering::SeqCst);
-          assert_eq!(v, 10, "{} is {v}", stringify!($e));
+          assert_eq!(v, $n, "{} is {v}", stringify!($e));
         };
       }
 
@@ -94,10 +92,10 @@ fn balance_least_connections() {
       dbg!(s2.load(Ordering::SeqCst));
       dbg!(s3.load(Ordering::SeqCst));
 
-      check!(s0);
-      check!(s1);
-      check!(s2);
-      check!(s3);
+      check!(s0, 10);
+      check!(s1, 20);
+      check!(s2, 30);
+      check!(s3, 40);
     }
   })
 }
