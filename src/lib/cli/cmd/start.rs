@@ -862,6 +862,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
             HttpHandle::Proxy {
               upstream,
               balance: _,
+              ketama: _,
               retries: _,
               retry_backoff: _,
               proxy_headers: _,
@@ -903,6 +904,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           crate::config::StreamHandle::Proxy {
             upstream,
             balance: _,
+            ketama: _,
             retries: _,
             retry_backoff: _,
             proxy_protocol_write_timeout: _,

@@ -1,3 +1,4 @@
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 #[cfg(feature = "stats")]
@@ -633,6 +634,89 @@ pub struct HttpUpstream {
   pub stats_total_connections: Arc<AtomicU64>,
 }
 
+impl std::hash::Hash for HttpUpstream {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    let Self {
+      base_url,
+      danger_accept_invalid_certs,
+      sni,
+      send_proxy_protocol,
+      proxy_protocol_write_timeout,
+      proxy_read_timeout,
+      proxy_write_timeout,
+      proxy_tcp_nodelay,
+      version,
+      proxy_headers,
+      response_headers,
+
+      #[cfg(any(
+        feature = "compression-br",
+        feature = "compression-zstd",
+        feature = "compression-gzip",
+        feature = "compression-deflate"
+      ))]
+      compression,
+      #[cfg(any(
+        feature = "compression-br",
+        feature = "compression-zstd",
+        feature = "compression-gzip",
+        feature = "compression-deflate"
+      ))]
+      compression_content_types,
+      #[cfg(any(
+        feature = "compression-br",
+        feature = "compression-zstd",
+        feature = "compression-gzip",
+        feature = "compression-deflate"
+      ))]
+      compression_min_size,
+
+      weight: _,
+      state_health: _,
+      state_open_connections: _,
+      #[cfg(feature = "stats")]
+        stats_total_read_bytes: _,
+      #[cfg(feature = "stats")]
+        stats_total_write_bytes: _,
+      #[cfg(feature = "stats")]
+        stats_total_connections: _,
+    } = &self;
+
+    base_url.hash(state);
+    version.hash(state);
+    danger_accept_invalid_certs.hash(state);
+    sni.hash(state);
+    send_proxy_protocol.hash(state);
+    proxy_protocol_write_timeout.hash(state);
+    proxy_read_timeout.hash(state);
+    proxy_write_timeout.hash(state);
+    proxy_tcp_nodelay.hash(state);
+    proxy_headers.hash(state);
+    response_headers.hash(state);
+    #[cfg(any(
+      feature = "compression-br",
+      feature = "compression-zstd",
+      feature = "compression-gzip",
+      feature = "compression-deflate"
+    ))]
+    compression.hash(state);
+    #[cfg(any(
+      feature = "compression-br",
+      feature = "compression-zstd",
+      feature = "compression-gzip",
+      feature = "compression-deflate"
+    ))]
+    compression_content_types.hash(state);
+    #[cfg(any(
+      feature = "compression-br",
+      feature = "compression-zstd",
+      feature = "compression-gzip",
+      feature = "compression-deflate"
+    ))]
+    compression_min_size.hash(state);
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StreamUpstream {
@@ -680,6 +764,39 @@ pub struct StreamUpstream {
   pub stats_total_connections: Arc<AtomicU64>,
 }
 
+impl std::hash::Hash for StreamUpstream {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    let Self {
+      origin,
+      danger_accept_invalid_certs,
+      sni,
+      send_proxy_protocol,
+      proxy_protocol_write_timeout,
+      proxy_read_timeout,
+      proxy_write_timeout,
+      proxy_tcp_nodelay,
+
+      weight: _,
+      state_open_connections: _,
+      #[cfg(feature = "stats")]
+        stats_total_read_bytes: _,
+      #[cfg(feature = "stats")]
+        stats_total_write_bytes: _,
+      #[cfg(feature = "stats")]
+        stats_total_connections: _,
+    } = &self;
+
+    origin.hash(state);
+    danger_accept_invalid_certs.hash(state);
+    sni.hash(state);
+    send_proxy_protocol.hash(state);
+    proxy_protocol_write_timeout.hash(state);
+    proxy_read_timeout.hash(state);
+    proxy_write_timeout.hash(state);
+    proxy_tcp_nodelay.hash(state);
+  }
+}
+
 // The serde(remote = "Self") is a trick to run a function after deserialization
 // happens to intialize the Ketama ring
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -721,7 +838,9 @@ impl StreamHandle {
       } => {
         let _ = ketama.insert(Ketama::from_buckets(upstream.iter().enumerate().map(
           |(i, upstream)| {
-            let key = i.to_le_bytes();
+            let mut hasher = DefaultHasher::new();
+            upstream.hash(&mut hasher);
+            let key = hasher.finish().to_le_bytes();
             let weight = upstream.weight.unwrap_or(NonZeroU32::new(1).unwrap());
             Bucket {
               key,
@@ -858,7 +977,9 @@ impl HttpHandle {
       } => {
         let _ = ketama.insert(Ketama::from_buckets(upstream.iter().enumerate().map(
           |(i, upstream)| {
-            let key = i.to_le_bytes();
+            let mut hasher = DefaultHasher::new();
+            upstream.hash(&mut hasher);
+            let key = hasher.finish().to_le_bytes();
             let weight = upstream.weight.unwrap_or(NonZeroU32::new(1).unwrap());
             Bucket {
               key,
@@ -896,7 +1017,7 @@ pub struct HttpMatcher {
   pub handle: HttpHandle,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub enum UpstreamVersion {
   #[serde(rename = "http/1.0")]
@@ -940,7 +1061,7 @@ impl From<UpstreamVersion> for hyper::Version {
   feature = "compression-gzip",
   feature = "compression-deflate"
 ))]
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Compress {
   pub algo: Encoding,

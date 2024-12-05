@@ -49,6 +49,8 @@ impl Ketama {
       }
     }
 
+    ring = ring.into_iter().dedup_by(|a, b| a.0 == b.0).collect();
+
     ring.sort_by(|a, b| a.0.cmp(&b.0));
 
     Self {

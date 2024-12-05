@@ -319,8 +319,26 @@ pub async fn serve_proxy(
           dot_files,
           follow_symlinks,
           response_headers,
+          #[cfg(any(
+            feature = "compression-br",
+            feature = "compression-zstd",
+            feature = "compression-gzip",
+            feature = "compression-deflate"
+          ))]
           compression,
+          #[cfg(any(
+            feature = "compression-br",
+            feature = "compression-zstd",
+            feature = "compression-gzip",
+            feature = "compression-deflate"
+          ))]
           compression_content_types,
+          #[cfg(any(
+            feature = "compression-br",
+            feature = "compression-zstd",
+            feature = "compression-gzip",
+            feature = "compression-deflate"
+          ))]
           compression_min_size,
         } => {
           use http::header::ALLOW;
