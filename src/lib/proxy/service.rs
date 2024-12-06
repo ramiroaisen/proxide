@@ -67,9 +67,9 @@ use unwrap_infallible::UnwrapInfallible;
 #[inline(always)]
 #[must_use = "increment_open_connections returns a drop guard"]
 fn increment_open_connections(atomic: Arc<AtomicUsize>) -> impl Drop {
-  atomic.fetch_add(1, Ordering::Relaxed);
+  atomic.fetch_add(1, Ordering::AcqRel);
   defer::defer(move || {
-    atomic.fetch_sub(1, Ordering::Relaxed);
+    atomic.fetch_sub(1, Ordering::AcqRel);
   })
 }
 
@@ -821,16 +821,16 @@ pub async fn serve_proxy(
           .await
           {
             Ok(response) => {
-              upstream.state_health.store(true, Ordering::Relaxed);
+              upstream.state_health.store(true, Ordering::Release);
               #[cfg(feature = "stats")]
               upstream
                 .stats_total_connections
-                .fetch_add(1, Ordering::Relaxed);
+                .fetch_add(1, Ordering::AcqRel);
               response
             }
             Err(e) => {
               log::warn!("proxy request error: {e} {e:?}");
-              upstream.state_health.store(false, Ordering::Relaxed);
+              upstream.state_health.store(false, Ordering::Release);
               drop(open_connections_guard);
               last_error = Some(e.into());
               root_request = Some(request);
@@ -997,16 +997,16 @@ pub async fn serve_proxy(
             .await
             {
               Ok(response) => {
-                upstream.state_health.store(true, Ordering::Relaxed);
+                upstream.state_health.store(true, Ordering::Release);
                 #[cfg(feature = "stats")]
                 upstream
                   .stats_total_connections
-                  .fetch_add(1, Ordering::Relaxed);
+                  .fetch_add(1, Ordering::AcqRel);
                 response
               }
               Err(e) => {
                 log::warn!("proxy request error: {e} {e:?}");
-                upstream.state_health.store(false, Ordering::Relaxed);
+                upstream.state_health.store(false, Ordering::Release);
                 last_error = Some(e.into());
                 root_request = Some(request);
                 continue 'upstreams;
@@ -1043,16 +1043,16 @@ pub async fn serve_proxy(
             .await
             {
               Ok(response) => {
-                upstream.state_health.store(true, Ordering::Relaxed);
+                upstream.state_health.store(true, Ordering::Release);
                 #[cfg(feature = "stats")]
                 upstream
                   .stats_total_connections
-                  .fetch_add(1, Ordering::Relaxed);
+                  .fetch_add(1, Ordering::AcqRel);
                 response
               }
               Err(mut e) => {
                 log::warn!("proxy request error: {e} {e:?}");
-                upstream.state_health.store(false, Ordering::Relaxed);
+                upstream.state_health.store(false, Ordering::Release);
                 match e.request_mut().take() {
                   Some(proxy_request_ref) => {
                     let mut body = Body::empty();
@@ -1345,7 +1345,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
               #[cfg(feature = "stats")]
               upstream
                 .stats_total_connections
-                .fetch_add(1, Ordering::Relaxed);
+                .fetch_add(1, Ordering::AcqRel);
               stream
             }
             Err(e) => {

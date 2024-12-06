@@ -188,13 +188,13 @@ pub fn balance_sort<'a, U: BalanceTarget>(
 
 impl BalanceTarget for HttpUpstream {
   fn is_active(&self) -> bool {
-    self.state_health.load(std::sync::atomic::Ordering::Relaxed)
+    self.state_health.load(std::sync::atomic::Ordering::Acquire)
   }
 
   fn open_connections(&self) -> usize {
     self
       .state_open_connections
-      .load(std::sync::atomic::Ordering::Relaxed)
+      .load(std::sync::atomic::Ordering::Acquire)
   }
 
   fn attempted_connections(&self) -> u64 {
@@ -216,7 +216,7 @@ impl BalanceTarget for StreamUpstream {
   fn open_connections(&self) -> usize {
     self
       .state_open_connections
-      .load(std::sync::atomic::Ordering::Relaxed)
+      .load(std::sync::atomic::Ordering::Acquire)
   }
 
   fn attempted_connections(&self) -> u64 {
