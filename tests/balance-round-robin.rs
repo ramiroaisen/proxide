@@ -52,7 +52,7 @@ fn balance_round_robin_with_weight() {
 fn balance_round_robin_with_weight_and_unhealthy_upstreams() {
   lock!("balance-round-robin.yml");
 
-  std::thread::sleep(Duration::from_millis(5_000));
+  std::thread::sleep(Duration::from_millis(200));
 
   for p in [0] {
     common::block_on(async move {
