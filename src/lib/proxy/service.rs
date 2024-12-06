@@ -800,6 +800,9 @@ pub async fn serve_proxy(
           *proxy_request.headers_mut() = proxy_headers.clone();
           add_headers!(proxy_request.headers_mut(), upstream.proxy_headers);
 
+          upstream
+            .state_attempted_connections
+            .fetch_add(1, Ordering::AcqRel);
           let open_connections_guard =
             increment_open_connections(upstream.state_open_connections.clone());
           let upstream_response = match send_request(
@@ -973,6 +976,9 @@ pub async fn serve_proxy(
             *proxy_request.headers_mut() = proxy_headers.clone();
             add_headers!(proxy_request.headers_mut(), upstream.proxy_headers);
 
+            upstream
+              .state_attempted_connections
+              .fetch_add(1, Ordering::AcqRel);
             open_connections_guard =
               increment_open_connections(upstream.state_open_connections.clone());
             match send_request(
@@ -1016,6 +1022,9 @@ pub async fn serve_proxy(
             *proxy_request.headers_mut() = proxy_headers.clone();
             add_headers!(proxy_request.headers_mut(), upstream.proxy_headers);
 
+            upstream
+              .state_attempted_connections
+              .fetch_add(1, Ordering::AcqRel);
             open_connections_guard =
               increment_open_connections(upstream.state_open_connections.clone());
             match send_request(
@@ -1395,6 +1404,9 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
               let proxy_io = TimeoutIo::new(proxy_stream, proxy_read_timeout, proxy_write_timeout);
               tokio::pin!(proxy_io);
 
+              upstream
+                .state_attempted_connections
+                .fetch_add(1, Ordering::AcqRel);
               let open_connections_guard =
                 increment_open_connections(upstream.state_open_connections.clone());
 
@@ -1448,6 +1460,9 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
                 }
               };
 
+              upstream
+                .state_attempted_connections
+                .fetch_add(1, Ordering::AcqRel);
               let open_connections_guard =
                 increment_open_connections(upstream.state_open_connections.clone());
 

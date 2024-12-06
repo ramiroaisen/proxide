@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 #[cfg(feature = "stats")]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -618,6 +618,12 @@ pub struct HttpUpstream {
   #[schemars(skip)]
   pub state_open_connections: Arc<AtomicUsize>,
 
+  /// This is the total number of connections that have been attempted to this upstream
+  /// this is used as the round-robin counter for the weighted RoundRobin balance algorithm
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
+  pub state_attempted_connections: Arc<AtomicU64>,
+
   #[serde(skip_deserializing, default)]
   #[schemars(skip)]
   #[cfg(feature = "stats")]
@@ -674,6 +680,7 @@ impl std::hash::Hash for HttpUpstream {
       weight: _,
       state_health: _,
       state_open_connections: _,
+      state_attempted_connections: _,
       #[cfg(feature = "stats")]
         stats_total_read_bytes: _,
       #[cfg(feature = "stats")]
@@ -748,6 +755,12 @@ pub struct StreamUpstream {
   #[schemars(skip)]
   pub state_open_connections: Arc<AtomicUsize>,
 
+  /// This is the total number of connections that have been attempted to this upstream
+  /// this is used as the round-robin counter for the weighted RoundRobin balance algorithm
+  #[serde(skip_deserializing, default)]
+  #[schemars(skip)]
+  pub state_attempted_connections: Arc<AtomicU64>,
+
   #[serde(skip_deserializing, default)]
   #[schemars(skip)]
   #[cfg(feature = "stats")]
@@ -778,6 +791,7 @@ impl std::hash::Hash for StreamUpstream {
 
       weight: _,
       state_open_connections: _,
+      state_attempted_connections: _,
       #[cfg(feature = "stats")]
         stats_total_read_bytes: _,
       #[cfg(feature = "stats")]
