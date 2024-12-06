@@ -1,8 +1,6 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::num::NonZeroU32;
 use std::str::FromStr;
-#[cfg(feature = "stats")]
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::Duration;
