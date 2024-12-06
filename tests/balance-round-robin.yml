@@ -12,6 +12,19 @@ stream:
           - origin: tcp://127.0.0.1:20352
           - origin: tcp://127.0.0.1:20353
 
+    - listen:
+        - addr: 20311
+      proxy:
+        balance: round-robin
+        upstream:
+          - origin: tcp://127.0.0.1:20350
+            weight: 10
+          - origin: tcp://127.0.0.1:20351
+            weight: 20
+          - origin: tcp://127.0.0.1:20352
+            weight: 30
+
+
 http:
   apps:
     - listen:
@@ -23,6 +36,19 @@ http:
           - base_url: http://127.0.0.1:20351
           - base_url: http://127.0.0.1:20352
           - base_url: http://127.0.0.1:20353
+
+    - listen:
+        - addr: 20310
+      proxy:
+        balance: round-robin
+        upstream:
+          - base_url: http://127.0.0.1:20350
+            weight: 10
+          - base_url: http://127.0.0.1:20351
+            weight: 20
+          - base_url: http://127.0.0.1:20352
+            weight: 30
+
 
     - listen:
         - addr: 20350

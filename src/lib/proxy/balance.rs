@@ -4,13 +4,12 @@ use std::{
   sync::atomic::{AtomicUsize, Ordering},
 };
 
-use itertools::Itertools;
-use nonzero::nonzero;
-
 use crate::{
   config::{Balance, HttpUpstream, StreamUpstream},
   ketama::Ketama,
 };
+use itertools::Itertools;
+use nonzero::nonzero;
 
 pub trait BalanceTarget {
   fn is_active(&self) -> bool;
@@ -32,10 +31,59 @@ pub fn balance_sort<'a, U: BalanceTarget>(
     _ => {
       let mut sorted = match balance {
         Balance::RoundRobin => {
-          let n = round_robin_index.fetch_add(1, Ordering::AcqRel) % upstreams.len();
-          upstreams[n..]
-            .iter()
-            .chain(upstreams[0..n].iter())
+          let divisor = {
+            let mut divisor = nonzero!(1u32);
+            for up in upstreams {
+              divisor = gcd::euclid_nonzero_u32(divisor, up.weight());
+            }
+            divisor
+          };
+
+          let round = {
+            let mut round = 0;
+            for up in upstreams {
+              round += up.weight().get() / divisor.get();
+            }
+            round
+          };
+
+          let rest = round_robin_index.fetch_add(1, Ordering::AcqRel) % round as usize;
+
+          let mut ups = upstreams.iter().map(|up| (up, 0u32)).collect::<Vec<_>>();
+
+          for _ in 0..rest {
+            let min_idx = ups
+              .iter()
+              .position_min_by(|(up_a, recv_a), (up_b, recv_b)| {
+                let div_a = *recv_a as f64 / up_a.weight().get() as f64;
+                let div_b = *recv_b as f64 / up_b.weight().get() as f64;
+                match div_a.partial_cmp(&div_b) {
+                  None | Some(std::cmp::Ordering::Equal) => up_b.weight().cmp(&up_a.weight()),
+                  Some(other) => other,
+                }
+              });
+
+            if let Some(idx) = min_idx {
+              ups[idx].1 += 1;
+            }
+          }
+
+          ups
+            .into_iter()
+            .map(|(up, recv)| {
+              let weight = up.weight();
+              let weighted_recv = recv as f64 / weight.get() as f64;
+              (up, weighted_recv, weight)
+            })
+            .sorted_by(
+              |(_, a_weighted_recv, a_weight), (_, b_weighted_recv, b_weight)| match a_weighted_recv
+                .partial_cmp(b_weighted_recv)
+              {
+                None | Some(std::cmp::Ordering::Equal) => b_weight.cmp(a_weight),
+                Some(other) => other,
+              },
+            )
+            .map(|(up, _, _)| up)
             .collect::<Vec<_>>()
         }
 
@@ -54,7 +102,7 @@ pub fn balance_sort<'a, U: BalanceTarget>(
             .iter()
             .enumerate()
             .flat_map(|(i, up)| {
-              std::iter::repeat(i).take(up.weight().get() as usize / divisor.get() as usize)
+              std::iter::repeat(i).take((up.weight().get() / divisor.get()) as usize)
             })
             .collect::<Vec<_>>();
 
@@ -93,7 +141,7 @@ pub fn balance_sort<'a, U: BalanceTarget>(
         }
 
         Balance::LeastConnections => {
-          let mut with_count = upstreams
+          upstreams
             .iter()
             .map(|upstream| {
               let conns = upstream.open_connections();
@@ -103,18 +151,13 @@ pub fn balance_sort<'a, U: BalanceTarget>(
               // two weighted numbers would be equal to 0 with 0 connections but different weights
               (upstream, weighted, weight)
             })
-            .collect::<Vec<_>>();
-
-          with_count.sort_by(|(_, weighted1, weight1), (_, weighted2, weight2)| {
-            match weighted1.partial_cmp(weighted2) {
-              None | Some(std::cmp::Ordering::Equal) => weight2.cmp(weight1),
-              Some(other) => other,
-            }
-          });
-
-          with_count
-            .into_iter()
-            .map(|(upstream, _, _)| upstream)
+            .sorted_by(|(_, weighted1, weight1), (_, weighted2, weight2)| {
+              match weighted1.partial_cmp(weighted2) {
+                None | Some(std::cmp::Ordering::Equal) => weight2.cmp(weight1),
+                Some(other) => other,
+              }
+            })
+            .map(|(up, _, _)| up)
             .collect::<Vec<_>>()
         }
       };
