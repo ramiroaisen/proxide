@@ -1326,7 +1326,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       let mut proxy_stream = proxy_stream;
 
       #[cfg(feature = "stats")]
-      let proxy_stream = CountersIo::new(
+      let mut proxy_stream = CountersIo::new(
         proxy_stream,
         upstream.stats_total_read_bytes.clone(),
         upstream.stats_total_write_bytes.clone(),

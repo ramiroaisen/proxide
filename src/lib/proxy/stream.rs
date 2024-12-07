@@ -19,8 +19,6 @@ use crate::proxy_protocol::{ProxyHeader, ProxyProtocolVersion};
 use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::sni::Sni;
 use crate::serde::url::StreamUpstreamScheme;
-#[cfg(feature = "stats")]
-use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 
 pub async fn tcp_connect(

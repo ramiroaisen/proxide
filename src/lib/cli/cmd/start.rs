@@ -994,6 +994,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
               proxy_read_timeout: _,
               proxy_write_timeout: _,
               proxy_tcp_nodelay: _,
+              healthcheck: _,
               state_round_robin_index: _,
             } => {
               for up in upstream {
