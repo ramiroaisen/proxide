@@ -1,16 +1,54 @@
 use serde::{Deserialize, Deserializer, Serialize};
-use std::{fmt::Display, ops::Deref};
+use std::fmt::Display;
 use url::{Host, Url};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct HttpUpstreamBaseUrl(Url);
+pub struct HttpUpstreamBaseUrl {
+  scheme: HttpUpstreamScheme,
+  host: Host,
+  port: Option<u16>,
+  path: String,
+}
+
+impl HttpUpstreamBaseUrl {
+  pub fn scheme(&self) -> HttpUpstreamScheme {
+    self.scheme
+  }
+
+  pub fn host(&self) -> &Host {
+    &self.host
+  }
+
+  pub fn port(&self) -> Option<u16> {
+    self.port
+  }
+
+  pub fn port_or_default(&self) -> u16 {
+    match self.port {
+      Some(port) => port,
+      None => match self.scheme {
+        HttpUpstreamScheme::Http => 80,
+        HttpUpstreamScheme::Https => 443,
+      },
+    }
+  }
+
+  pub fn path(&self) -> &str {
+    &self.path
+  }
+}
 
 // crate::newtype!(HttpUpstreamBaseUrl => Url);
 crate::json_schema_as!(HttpUpstreamBaseUrl => Url);
 
 impl Display for HttpUpstreamBaseUrl {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    self.0.fmt(f)
+    write!(f, "{}://{}", self.scheme(), self.host())?;
+    if let Some(port) = self.port {
+      write!(f, ":{}", port)?;
+    }
+    write!(f, "{}", self.path)?;
+    Ok(())
   }
 }
 
@@ -34,14 +72,20 @@ impl TryFrom<Url> for HttpUpstreamBaseUrl {
   type Error = HttpUpstreamBaseUrlError;
 
   fn try_from(url: Url) -> Result<Self, Self::Error> {
-    match url.scheme() {
-      "http" | "https" => {}
+    let scheme = match url.scheme() {
+      "http" => HttpUpstreamScheme::Http,
+      "https" => HttpUpstreamScheme::Https,
       other => return Err(HttpUpstreamBaseUrlError::InvalidScheme(other.to_string())),
     };
 
-    if url.host().is_none() {
-      return Err(HttpUpstreamBaseUrlError::MissingHost);
-    }
+    let host = match url.host() {
+      Some(host) => host.to_owned(),
+      None => return Err(HttpUpstreamBaseUrlError::MissingHost),
+    };
+
+    let port = url.port();
+
+    let path = url.path().to_string();
 
     if !url.username().is_empty() {
       return Err(HttpUpstreamBaseUrlError::UsernameNotSupported);
@@ -59,21 +103,46 @@ impl TryFrom<Url> for HttpUpstreamBaseUrl {
       return Err(HttpUpstreamBaseUrlError::FragmentNotSupported);
     }
 
-    Ok(Self(url))
+    Ok(Self {
+      scheme,
+      host,
+      port,
+      path,
+    })
   }
 }
 
-impl Deref for HttpUpstreamBaseUrl {
-  type Target = Url;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum HttpUpstreamScheme {
+  Http,
+  Https,
+}
 
-  fn deref(&self) -> &Self::Target {
-    &self.0
+impl std::fmt::Display for HttpUpstreamScheme {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      HttpUpstreamScheme::Http => write!(f, "http"),
+      HttpUpstreamScheme::Https => write!(f, "https"),
+    }
   }
 }
 
 impl From<HttpUpstreamBaseUrl> for Url {
   fn from(me: HttpUpstreamBaseUrl) -> Self {
-    me.0
+    Url::parse(&format!(
+      "{scheme}://{host}{port}{path}",
+      scheme = me.scheme(),
+      host = me.host(),
+      port = match me.port() {
+        None => String::new(),
+        Some(port) => {
+          // TODO: remove this allocation
+          format!(":{}", port)
+        }
+      },
+      path = me.path(),
+    ))
+    .unwrap()
   }
 }
 
@@ -86,24 +155,23 @@ impl<'de> Deserialize<'de> for HttpUpstreamBaseUrl {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct StreamUpstreamOrigin(Url);
+pub struct StreamUpstreamOrigin {
+  scheme: StreamUpstreamScheme,
+  host: Host,
+  port: u16,
+}
 
 impl StreamUpstreamOrigin {
   pub fn port(&self) -> u16 {
-    self.0.port().unwrap()
+    self.port
   }
 
-  pub fn host(&self) -> Host<&str> {
-    self.0.host().unwrap()
+  pub fn host(&self) -> &Host<String> {
+    &self.host
   }
 
   pub fn scheme(&self) -> StreamUpstreamScheme {
-    match self.0.scheme() {
-      "tcp" => StreamUpstreamScheme::Tcp,
-      "ssl" => StreamUpstreamScheme::Ssl,
-      "tls" => StreamUpstreamScheme::Tls,
-      _ => unreachable!(),
-    }
+    self.scheme
   }
 }
 
@@ -148,18 +216,22 @@ impl TryFrom<Url> for StreamUpstreamOrigin {
   type Error = StreamUpstreamOriginError;
 
   fn try_from(url: Url) -> Result<Self, Self::Error> {
-    match url.scheme() {
-      "tcp" | "ssl" | "tls" => {}
+    let scheme = match url.scheme() {
+      "tcp" => StreamUpstreamScheme::Tcp,
+      "ssl" => StreamUpstreamScheme::Ssl,
+      "tls" => StreamUpstreamScheme::Tls,
       other => return Err(StreamUpstreamOriginError::InvalidScheme(other.to_string())),
     };
 
-    if url.host().is_none() {
-      return Err(StreamUpstreamOriginError::MissingHost);
-    }
+    let host = match url.host() {
+      Some(host) => host.to_owned(),
+      None => return Err(StreamUpstreamOriginError::MissingHost),
+    };
 
-    if url.port().is_none() {
-      return Err(StreamUpstreamOriginError::MissingPort);
-    }
+    let port = match url.port() {
+      Some(port) => port,
+      None => return Err(StreamUpstreamOriginError::MissingPort),
+    };
 
     if !url.username().is_empty() {
       return Err(StreamUpstreamOriginError::UsernameNotSupported);
@@ -177,27 +249,19 @@ impl TryFrom<Url> for StreamUpstreamOrigin {
       return Err(StreamUpstreamOriginError::FragmentNotSupported);
     }
 
-    Ok(Self(url))
-  }
-}
-
-impl Deref for StreamUpstreamOrigin {
-  type Target = Url;
-
-  fn deref(&self) -> &Self::Target {
-    &self.0
+    Ok(Self { scheme, host, port })
   }
 }
 
 impl From<StreamUpstreamOrigin> for Url {
   fn from(me: StreamUpstreamOrigin) -> Self {
-    me.0
+    Url::parse(&format!("{}://{}:{}", me.scheme, me.host, me.port)).unwrap()
   }
 }
 
 impl Display for StreamUpstreamOrigin {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    self.0.fmt(f)
+    write!(f, "{}://{}:{}", self.scheme, self.host, self.port)
   }
 }
 

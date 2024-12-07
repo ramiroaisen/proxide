@@ -13,14 +13,8 @@ pub enum ProxyHttpError {
   #[error("invalid host in request")]
   InvalidHost,
 
-  #[error("invalid upstream url, missing host")]
-  InvalidUpstreamUrlMissingHost,
-
   #[error("could not parse url")]
   UpstreamUrlParse(#[source] InvalidUri),
-
-  #[error("upstream url missing domain")]
-  UpstreamUrlMissingDomain,
 
   #[error("hyper server error: {0}")]
   IncomingBody(#[source] hyper::Error),
@@ -113,8 +107,6 @@ impl ProxyHttpError {
       E::NoHost => ErrorOriginator::User,
       E::InvalidHost => ErrorOriginator::User,
       E::UpstreamUrlParse(_) => ErrorOriginator::User,
-      E::UpstreamUrlMissingDomain => ErrorOriginator::Config,
-      E::InvalidUpstreamUrlMissingHost => ErrorOriginator::Config,
       E::InvalidHeaderInterpolation => ErrorOriginator::Config,
       E::IncomingBody(_) => ErrorOriginator::Io,
       E::CompressBodyChunk(_) => ErrorOriginator::Io,
@@ -150,9 +142,7 @@ impl ProxyHttpError {
       E::NoHost => StatusCode::BAD_REQUEST,
       E::InvalidHost => StatusCode::BAD_REQUEST,
       E::UpstreamUrlParse(_) => StatusCode::INTERNAL_SERVER_ERROR,
-      E::UpstreamUrlMissingDomain => StatusCode::INTERNAL_SERVER_ERROR,
       E::InvalidHeaderInterpolation => StatusCode::INTERNAL_SERVER_ERROR,
-      E::InvalidUpstreamUrlMissingHost => StatusCode::INTERNAL_SERVER_ERROR,
       E::IncomingBody(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::CompressBodyChunk(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::StatsSerialize(_) => StatusCode::INTERNAL_SERVER_ERROR,

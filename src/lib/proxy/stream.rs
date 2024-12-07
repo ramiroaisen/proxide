@@ -18,7 +18,7 @@ use crate::proxy_protocol::{ProxyHeader, ProxyProtocolVersion};
 #[allow(unused)]
 use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::sni::Sni;
-use crate::serde::url::StreamUpstreamScheme;
+use crate::serde::url::{StreamUpstreamOrigin, StreamUpstreamScheme};
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 
 pub async fn tcp_connect(
@@ -127,9 +127,7 @@ pub async fn tls_handshake<T: AsyncWrite + AsyncRead + Unpin>(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn healthcheck(
-  scheme: StreamUpstreamScheme,
-  host: Host,
-  port: u16,
+  target: &StreamUpstreamOrigin,
   proxy_tcp_nodelay: bool,
   proxy_read_timeout: Duration,
   proxy_write_timeout: Duration,
@@ -138,7 +136,8 @@ pub async fn healthcheck(
   sni: Option<Sni>,
   danger_accept_invalid_certs: bool,
 ) -> Result<(), ProxyStreamError> {
-  let mut stream = match tcp_connect(host.clone(), port, proxy_tcp_nodelay).await {
+  let mut stream = match tcp_connect(target.host().clone(), target.port(), proxy_tcp_nodelay).await
+  {
     Ok(stream) => stream,
     Err(e) => {
       log::warn!("proxy request error: {e} {e:?}");
@@ -146,7 +145,7 @@ pub async fn healthcheck(
     }
   };
 
-  let is_tls = match scheme {
+  let is_tls = match target.scheme() {
     StreamUpstreamScheme::Tcp => false,
     StreamUpstreamScheme::Ssl | StreamUpstreamScheme::Tls => true,
   };
@@ -176,7 +175,7 @@ pub async fn healthcheck(
 
   let server_name = match sni {
     Some(sni) => sni.0.clone(),
-    None => ServerName::try_from(host.to_string())?,
+    None => ServerName::try_from(target.host().to_string())?,
   };
 
   tls_handshake(io, server_name, danger_accept_invalid_certs).await?;

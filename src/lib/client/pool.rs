@@ -33,6 +33,7 @@ use crate::config::defaults::{DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROX
 use crate::proxy::error::{ErrorOriginator, ProxyHttpError};
 use crate::proxy_protocol::{self, ProxyHeader, ProxyProtocolVersion};
 use crate::serde::sni::Sni;
+use crate::serde::url::HttpUpstreamScheme;
 #[cfg(feature = "stats")]
 use crate::stats::counters_io::CountersIo;
 use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
@@ -131,18 +132,13 @@ impl Key {
   pub fn from_config(config: &Config, app: &HttpApp, upstream: &HttpUpstream) -> Result<Self, InvalidUpstreamError> {
 
     let protocol = match upstream.base_url.scheme() {
-      "http" => Protocol::Http,
-      "https" => Protocol::Https,
-      other => return Err(InvalidUpstreamError::InvalidProtocol(other.to_string())),
+      HttpUpstreamScheme::Http => Protocol::Http,
+      HttpUpstreamScheme::Https => Protocol::Https,
     };
     
-    let host = match upstream.base_url.host() {
-      Some(host) => host.to_owned(),
-      None => return Err(InvalidUpstreamError::NoHost),
-    };
+    let host = upstream.base_url.host().clone();
 
-    let port = upstream.base_url.port()
-      .unwrap_or_else(|| protocol.default_port());
+    let port = upstream.base_url.port_or_default();
 
     let version = upstream.version.into();
 

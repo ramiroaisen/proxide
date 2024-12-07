@@ -702,14 +702,13 @@ pub async fn serve_proxy(
           Uri::try_from(format!(
             "{scheme}://{host}{port}{path_prefix}{path}",
             scheme = upstream.base_url.scheme(),
-            host = match upstream.base_url.host_str() {
-              Some(host) => host,
-              None => return Err(ProxyHttpError::InvalidUpstreamUrlMissingHost),
-            },
+            host = upstream.base_url.host(),
             port = match upstream.base_url.port() {
-              // TODO: remove this allocation
-              Some(port) => format!(":{}", port),
               None => String::new(),
+              Some(port) => {
+                // TODO: remove this allocation
+                format!(":{}", port)
+              }
             },
             path_prefix = match upstream.base_url.path() {
               "/" => "",

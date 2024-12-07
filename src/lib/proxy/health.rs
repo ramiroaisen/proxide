@@ -1,9 +1,7 @@
-use url::Host;
-
 use crate::{
   client::pool::{healthcheck, Key},
   proxy_protocol::ProxyProtocolVersion,
-  serde::{sni::Sni, url::StreamUpstreamScheme},
+  serde::{sni::Sni, url::StreamUpstreamOrigin},
 };
 use std::{
   convert::Infallible,
@@ -47,9 +45,7 @@ pub async fn upstream_healthcheck_task(
 pub async fn stream_upstream_healthcheck_task(
   interval: Duration,
   upstream_health: Arc<AtomicBool>,
-  scheme: StreamUpstreamScheme,
-  host: Host,
-  port: u16,
+  target: StreamUpstreamOrigin,
   proxy_tcp_nodelay: bool,
   proxy_read_timeout: Duration,
   proxy_write_timeout: Duration,
@@ -58,15 +54,11 @@ pub async fn stream_upstream_healthcheck_task(
   sni: Option<Sni>,
   danger_accept_invalid_certs: bool,
 ) -> Infallible {
-  let url = format!("{}://{}:{}", scheme, host, port);
-
-  log::debug!("starting upstream healthchecker for {url}");
+  log::debug!("starting upstream healthchecker for {target}");
 
   loop {
     let store = match super::stream::healthcheck(
-      scheme,
-      host.clone(),
-      port,
+      &target,
       proxy_tcp_nodelay,
       proxy_read_timeout,
       proxy_write_timeout,
@@ -87,9 +79,9 @@ pub async fn stream_upstream_healthcheck_task(
     let prev = upstream_health.swap(store, Ordering::AcqRel);
     if prev != store {
       if store {
-        log::info!("upstream {url} health set to ok");
+        log::info!("upstream {target} health set to ok");
       } else {
-        log::info!("upstream {url} health set to error");
+        log::info!("upstream {target} health set to error");
       }
     }
 

@@ -907,15 +907,11 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           let upstream_health = upstream.state_health.clone();
           let cancelled = cancel_token.clone().cancelled_owned();
 
-          let scheme = upstream.origin.scheme();
-          let host = upstream.origin.host().to_owned();
-          let port = upstream.origin.port();
-
-          let url = format!("{}://{}:{}", scheme, host, port);
-
           let sni = upstream.sni.clone();
           let send_proxy_protocol = upstream.send_proxy_protocol;
           let danger_accept_invalid_certs = upstream.danger_accept_invalid_certs;
+
+          let url = upstream.origin.clone();
 
           tokio::spawn({
             async move {
@@ -924,9 +920,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
                 never = stream_upstream_healthcheck_task(
                   interval,
                   upstream_health,
-                  scheme,
-                  host,
-                  port,
+                  url.clone(),
                   proxy_tcp_nodelay,
                   proxy_read_timeout,
                   proxy_write_timeout,
