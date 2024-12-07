@@ -14,7 +14,11 @@ use std::{
   time::Duration,
 };
 
-pub async fn upstream_healthcheck_task(key: Key, upstream_health: Arc<AtomicBool>) -> Infallible {
+pub async fn upstream_healthcheck_task(
+  interval: Duration,
+  key: Key,
+  upstream_health: Arc<AtomicBool>,
+) -> Infallible {
   log::debug!("starting upstream healthchecker for {key}");
 
   loop {
@@ -35,7 +39,7 @@ pub async fn upstream_healthcheck_task(key: Key, upstream_health: Arc<AtomicBool
       }
     }
 
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    tokio::time::sleep(interval).await;
   }
 }
 

@@ -191,6 +191,10 @@ pub mod defaults {
   pub const DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT: Duration = Duration::from_secs(60);
   pub const DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
+  pub const DEFAULT_HTTP_HEALTHCHECK: HttpHealthcheck = HttpHealthcheck {
+    interval: SDuration(Duration::from_secs(1)),
+  };
+
   pub const DEFAULT_PROXY_TCP_NODELAY: bool = false;
 }
 
@@ -344,6 +348,9 @@ pub struct Http {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub balance: Option<Balance>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub healthcheck: Option<HttpHealthcheck>,
+
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub apps: Vec<HttpApp>,
 }
@@ -384,6 +391,7 @@ impl Http {
         proxy_write_timeout: None,
         proxy_protocol_read_timeout: None,
         proxy_tcp_nodelay: None,
+        healthcheck: None,
         apps,
         response_headers,
         proxy_headers,
@@ -509,6 +517,9 @@ pub struct HttpApp {
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub response_headers: ResponseHeaders,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub healthcheck: Option<HttpHealthcheck>,
+
   #[serde(flatten)]
   pub handle: HttpHandle,
 }
@@ -614,6 +625,9 @@ pub struct HttpUpstream {
   #[serde(default)]
   pub danger_accept_invalid_certs: bool,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub healthcheck: Option<HttpHealthcheck>,
+
   // should we send requests to this upstream or not
   #[serde(skip_deserializing, default = "arc_atomic_bool::<true>")]
   #[schemars(skip)]
@@ -677,6 +691,7 @@ impl std::hash::Hash for HttpUpstream {
       ))]
       compression_min_size,
 
+      healthcheck: _,
       weight: _,
       state_health: _,
       state_open_connections: _,
@@ -974,6 +989,8 @@ pub enum HttpHandle {
     response_headers: ResponseHeaders,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_protocol_write_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    healthcheck: Option<HttpHealthcheck>,
     #[serde(skip_deserializing, default)]
     state_round_robin_index: Arc<AtomicUsize>,
     upstream: Vec<HttpUpstream>,
@@ -1073,6 +1090,11 @@ impl From<UpstreamVersion> for hyper::Version {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct StreamHealthcheck {
+  pub interval: SDuration,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct HttpHealthcheck {
   pub interval: SDuration,
 }
 

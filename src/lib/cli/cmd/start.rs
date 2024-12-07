@@ -16,10 +16,10 @@ use crate::{
   config::{
     self,
     defaults::{
-      DEFAULT_HTTP_SERVER_READ_TIMEOUT, DEFAULT_HTTP_SERVER_WRITE_TIMEOUT,
-      DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT,
-      DEFAULT_PROXY_TCP_NODELAY, DEFAULT_STREAM_PROXY_READ_TIMEOUT,
-      DEFAULT_STREAM_PROXY_WRITE_TIMEOUT,
+      DEFAULT_HTTP_HEALTHCHECK, DEFAULT_HTTP_SERVER_READ_TIMEOUT,
+      DEFAULT_HTTP_SERVER_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT,
+      DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY,
+      DEFAULT_STREAM_PROXY_READ_TIMEOUT, DEFAULT_STREAM_PROXY_WRITE_TIMEOUT,
     },
     server_name::ServerName,
     Config, HttpApp, HttpHandle, StreamHandle,
@@ -791,7 +791,11 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
         HttpHandle::Stats { .. } => {}
         #[cfg(feature = "serve-static")]
         HttpHandle::Static { .. } => {}
-        HttpHandle::Proxy { upstream, .. } => {
+        HttpHandle::Proxy {
+          upstream,
+          healthcheck: handle_healthcheck,
+          ..
+        } => {
           for upstream in upstream.iter() {
             let key = Key::from_config(config, app, upstream).with_context(|| {
               format!(
@@ -800,13 +804,23 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
               )
             })?;
 
+            let healthcheck = crate::option!(
+              upstream.healthcheck,
+              *handle_healthcheck,
+              app.healthcheck,
+              config.http.healthcheck,
+              => DEFAULT_HTTP_HEALTHCHECK
+            );
+
+            let interval = *healthcheck.interval;
+
             tokio::spawn({
               let upstream_health = upstream.state_health.clone();
               let cancelled = cancel_token.clone().cancelled_owned();
               async move {
                 tokio::select! {
                   _ = cancelled => log::info!("received shutdown signal, stopping upstream healthcheck task for {key}"),
-                  never = upstream_healthcheck_task(key.clone(), upstream_health) => match never {}
+                  never = upstream_healthcheck_task(interval, key.clone(), upstream_health) => match never {}
                 }
               }
             });

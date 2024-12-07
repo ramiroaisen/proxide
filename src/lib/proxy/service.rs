@@ -542,6 +542,7 @@ pub async fn serve_proxy(
           proxy_read_timeout,
           proxy_write_timeout,
           proxy_tcp_nodelay,
+          healthcheck: _,
         } => {
           handle_balance = *balance;
           handle_ketama = ketama.as_ref();
