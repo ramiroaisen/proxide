@@ -6,22 +6,17 @@ use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderName, HeaderValue, CONNECTION, CONTENT_TYPE, HOST, SERVER};
 use hyper::{body::Incoming, service::Service, Request, Response};
 use hyper::{Method, StatusCode};
-use hyper_rustls::ConfigBuilderExt;
 use hyper_util::rt::TokioIo;
 use pin_project::pin_project;
-use rustls::pki_types::ServerName;
-use static_init::dynamic;
+use rustls_pki_types::ServerName;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use std::{convert::Infallible, pin::Pin, sync::Arc};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::JoinHandle;
-use tokio_util::time::FutureExt;
-use url::Host;
 
 #[cfg(feature = "interpolation")]
 use super::context::HttpContext;
@@ -52,14 +47,15 @@ use crate::net::timeout::TimeoutIo;
 use crate::proxy::balance::balance_sort;
 use crate::proxy::error::ProxyHttpError;
 use crate::proxy::header::SERVER_HEADER_VALUE;
+use crate::proxy::stream::{tcp_connect, tls_handshake, write_proxy_protocol};
 use crate::proxy_protocol::ProxyHeader;
 #[allow(unused)]
 use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
+use crate::serde::url::StreamUpstreamScheme;
 use crate::service::{Connection, StreamService};
 #[cfg(feature = "stats")]
 use crate::stats::counters_io::CountersIo;
-use crate::tls::danger_no_cert_verifier::DangerNoCertVerifier;
 use crate::upgrade::{request_connection_upgrade, response_connection_upgrade};
 #[cfg(feature = "interpolation")]
 use unwrap_infallible::UnwrapInfallible;
@@ -729,7 +725,7 @@ pub async fn serve_proxy(
         }
 
         let read_timeout = crate::option!(
-          @timeout
+          @duration
           upstream.proxy_read_timeout,
           handle_proxy_read_timeout,
           app.proxy_read_timeout,
@@ -738,7 +734,7 @@ pub async fn serve_proxy(
         );
 
         let write_timeout = crate::option!(
-          @timeout
+          @duration
           upstream.proxy_write_timeout,
           handle_proxy_write_timeout,
           app.proxy_write_timeout,
@@ -761,7 +757,7 @@ pub async fn serve_proxy(
           None => None,
           Some(version) => {
             let timeout = crate::option!(
-              @timeout
+              @duration
               upstream.proxy_protocol_write_timeout,
               handle_proxy_protocol_write_timeout,
               config.http.proxy_protocol_write_timeout,
@@ -800,9 +796,6 @@ pub async fn serve_proxy(
           *proxy_request.headers_mut() = proxy_headers.clone();
           add_headers!(proxy_request.headers_mut(), upstream.proxy_headers);
 
-          upstream
-            .state_attempted_connections
-            .fetch_add(1, Ordering::AcqRel);
           let open_connections_guard =
             increment_open_connections(upstream.state_open_connections.clone());
           let upstream_response = match send_request(
@@ -976,11 +969,9 @@ pub async fn serve_proxy(
             *proxy_request.headers_mut() = proxy_headers.clone();
             add_headers!(proxy_request.headers_mut(), upstream.proxy_headers);
 
-            upstream
-              .state_attempted_connections
-              .fetch_add(1, Ordering::AcqRel);
             open_connections_guard =
               increment_open_connections(upstream.state_open_connections.clone());
+
             match send_request(
               proxy_request,
               proxy_sni,
@@ -1022,11 +1013,9 @@ pub async fn serve_proxy(
             *proxy_request.headers_mut() = proxy_headers.clone();
             add_headers!(proxy_request.headers_mut(), upstream.proxy_headers);
 
-            upstream
-              .state_attempted_connections
-              .fetch_add(1, Ordering::AcqRel);
             open_connections_guard =
               increment_open_connections(upstream.state_open_connections.clone());
+
             match send_request(
               proxy_request,
               proxy_sni,
@@ -1224,6 +1213,7 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
       proxy_read_timeout,
       proxy_write_timeout,
       proxy_tcp_nodelay,
+      healthcheck: _,
       state_round_robin_index,
     } => (
       upstream,
@@ -1260,14 +1250,14 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
   );
 
   let server_read_timeout = crate::option!(
-    @timeout
+    @duration
     app.server_read_timeout,
     config.stream.server_read_timeout,
     => DEFAULT_STREAM_SERVER_READ_TIMEOUT
   );
 
   let server_write_timeout = crate::option!(
-    @timeout
+    @duration
     app.server_write_timeout,
     config.stream.server_write_timeout,
     => DEFAULT_STREAM_SERVER_WRITE_TIMEOUT
@@ -1290,206 +1280,133 @@ pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
     );
 
     'upstreams: for upstream in sorted_upstreams {
+      let proxy_read_timeout = crate::option!(
+        @duration
+        upstream.proxy_read_timeout,
+        handle_proxy_read_timeout,
+        app.proxy_read_timeout,
+        config.stream.proxy_read_timeout
+        => DEFAULT_STREAM_PROXY_READ_TIMEOUT
+      );
+
+      let proxy_write_timeout = crate::option!(
+        @duration
+        upstream.proxy_write_timeout,
+        handle_proxy_write_timeout,
+        app.proxy_write_timeout,
+        config.stream.proxy_write_timeout
+        => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
+      );
+
+      let proxy_tcp_nodelay = crate::option!(
+        upstream.proxy_tcp_nodelay,
+        handle_proxy_tcp_nodelay,
+        app.proxy_tcp_nodelay,
+        config.stream.proxy_tcp_nodelay,
+        config.proxy_tcp_nodelay,
+        => DEFAULT_PROXY_TCP_NODELAY
+      );
+
+      let proxy_stream = match tcp_connect(
+        upstream.origin.host().to_owned(),
+        upstream.origin.port(),
+        proxy_tcp_nodelay,
+      )
+      .await
+      {
+        Ok(stream) => stream,
+        Err(e) => {
+          last_error = Some(e);
+          continue 'upstreams;
+        }
+      };
+
+      #[cfg(not(feature = "stats"))]
+      let mut proxy_stream = proxy_stream;
+
+      #[cfg(feature = "stats")]
+      let proxy_stream = CountersIo::new(
+        proxy_stream,
+        upstream.stats_total_read_bytes.clone(),
+        upstream.stats_total_write_bytes.clone(),
+      );
+
+      #[cfg(feature = "stats")]
+      upstream
+        .stats_total_connections
+        .fetch_add(1, Ordering::AcqRel);
+
+      let open_connections_guard =
+        increment_open_connections(upstream.state_open_connections.clone());
+
+      if let Some(version) = upstream.send_proxy_protocol {
+        let timeout = crate::option!(
+          @duration
+          upstream.proxy_protocol_write_timeout,
+          handle_proxy_protocol_write_timeout,
+          config.stream.proxy_protocol_write_timeout,
+          config.proxy_protocol_write_timeout,
+          => DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT
+        );
+
+        let header = match &proxy_header {
+          Some(header) => header.clone(),
+          None => match ProxyHeader::try_from((remote_addr, local_addr)) {
+            Ok(header) => header,
+            Err(_) => ProxyHeader::Unknown,
+          },
+        };
+
+        let proxy_protocol_config = ProxyProtocolConfig {
+          header,
+          version,
+          timeout,
+        };
+
+        if let Err(e) = write_proxy_protocol(&mut proxy_stream, proxy_protocol_config).await {
+          last_error = Some(e);
+          continue 'upstreams;
+        }
+      };
+
       match upstream.origin.scheme() {
-        "tcp" | "ssl" | "tls" => {
-          let domain = match upstream.origin.domain() {
-            Some(domain) => domain,
-            None => {
-              return Err(ProxyStreamError::UrlMissingDomain);
-            }
+        StreamUpstreamScheme::Tcp => {
+          let proxy_io = TimeoutIo::new(proxy_stream, proxy_read_timeout, proxy_write_timeout);
+          tokio::pin!(proxy_io);
+
+          let r = copy(&mut io, &mut proxy_io).await;
+          drop(open_connections_guard);
+          return r;
+        }
+
+        StreamUpstreamScheme::Ssl | StreamUpstreamScheme::Tls => {
+          let server_name = match &upstream.sni {
+            Some(sni) => sni.0.clone(),
+            None => ServerName::try_from(upstream.origin.host().to_string())?,
           };
 
-          let port = match upstream.origin.port() {
-            Some(port) => port,
-            None => {
-              return Err(ProxyStreamError::UrlMissingPort);
-            }
-          };
-
-          let proxy_read_timeout = crate::option!(
-            @timeout
-            upstream.proxy_read_timeout,
-            handle_proxy_read_timeout,
-            app.proxy_read_timeout,
-            config.stream.proxy_read_timeout
-            => DEFAULT_STREAM_PROXY_READ_TIMEOUT
-          );
-
-          let proxy_write_timeout = crate::option!(
-            @timeout
-            upstream.proxy_write_timeout,
-            handle_proxy_write_timeout,
-            app.proxy_write_timeout,
-            config.stream.proxy_write_timeout
-            => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
-          );
-
-          let proxy_tcp_nodelay = crate::option!(
-            upstream.proxy_tcp_nodelay,
-            handle_proxy_tcp_nodelay,
-            app.proxy_tcp_nodelay,
-            config.stream.proxy_tcp_nodelay,
-            config.proxy_tcp_nodelay,
-            => DEFAULT_PROXY_TCP_NODELAY
-          );
-
-          // unwrap: upstream origin host is checked at construction
-          let connect = match upstream.origin.host().unwrap() {
-            Host::Domain(domain) => TcpStream::connect((domain, port)).await,
-            Host::Ipv4(ipv4) => TcpStream::connect((ipv4, port)).await,
-            Host::Ipv6(ipv6) => TcpStream::connect((ipv6, port)).await,
-          };
-
-          let proxy_stream = match connect {
-            Ok(stream) => {
-              #[cfg(feature = "stats")]
-              upstream
-                .stats_total_connections
-                .fetch_add(1, Ordering::AcqRel);
-              stream
-            }
+          let tls_stream = match tls_handshake(
+            proxy_stream,
+            server_name,
+            upstream.danger_accept_invalid_certs,
+          )
+          .await
+          {
+            Ok(stream) => stream,
             Err(e) => {
-              last_error = Some(ProxyStreamError::TcpConnect(e));
+              last_error = Some(e);
               continue 'upstreams;
             }
           };
 
-          if proxy_tcp_nodelay {
-            proxy_stream
-              .set_nodelay(true)
-              .map_err(ProxyStreamError::SetTcpNoDelay)?;
-          }
+          let proxy_io = TimeoutIo::new(tls_stream, proxy_read_timeout, proxy_write_timeout);
+          tokio::pin!(proxy_io);
 
-          #[cfg(feature = "stats")]
-          let mut proxy_stream = CountersIo::new(
-            proxy_stream,
-            upstream.stats_total_read_bytes.clone(),
-            upstream.stats_total_write_bytes.clone(),
-          );
+          let r = copy(&mut io, &mut proxy_io).await;
 
-          #[cfg(not(feature = "stats"))]
-          let mut proxy_stream = proxy_stream;
+          drop(open_connections_guard);
 
-          if let Some(version) = upstream.send_proxy_protocol {
-            let timeout = crate::option!(
-              @timeout
-              upstream.proxy_protocol_write_timeout,
-              handle_proxy_protocol_write_timeout,
-              config.stream.proxy_protocol_write_timeout,
-              config.proxy_protocol_write_timeout,
-              => DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT
-            );
-
-            let header = match &proxy_header {
-              Some(header) => header.clone(),
-              None => match ProxyHeader::try_from((remote_addr, local_addr)) {
-                Ok(header) => header,
-                Err(_) => ProxyHeader::Unknown,
-              },
-            };
-
-            let buf = crate::proxy_protocol::encode(&header, version)
-              .map_err(ProxyStreamError::ProxyProtocolEncode)?;
-
-            proxy_stream
-              .write_all(&buf)
-              .timeout(timeout)
-              .await
-              .map_err(|_| ProxyStreamError::ProxyProtocolWriteTimeout)?
-              .map_err(ProxyStreamError::ProxyProtocolWrite)?;
-          };
-
-          match upstream.origin.scheme() {
-            "tcp" => {
-              let proxy_io = TimeoutIo::new(proxy_stream, proxy_read_timeout, proxy_write_timeout);
-              tokio::pin!(proxy_io);
-
-              upstream
-                .state_attempted_connections
-                .fetch_add(1, Ordering::AcqRel);
-              let open_connections_guard =
-                increment_open_connections(upstream.state_open_connections.clone());
-
-              let r = copy(&mut io, &mut proxy_io).await;
-              drop(open_connections_guard);
-              return r;
-            }
-
-            "ssl" | "tls" => {
-              let server_name = match &upstream.sni {
-                Some(sni) => sni.0.clone(),
-                None => ServerName::try_from(domain.to_owned())?,
-              };
-
-              let tls_connector = match upstream.danger_accept_invalid_certs {
-                true => {
-                  #[dynamic]
-                  static DANGER_TLS_NO_CERT_VERFIER_CONNECTOR: tokio_rustls::TlsConnector = {
-                    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
-                      crate::tls::crypto::default_provider(),
-                    ))
-                    .with_safe_default_protocol_versions()
-                    .expect("cannot build tls client config with default protocol versions")
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
-                    .with_no_client_auth();
-
-                    config.enable_sni = true;
-                    tokio_rustls::TlsConnector::from(Arc::new(config))
-                  };
-
-                  &*DANGER_TLS_NO_CERT_VERFIER_CONNECTOR
-                }
-
-                false => {
-                  #[dynamic]
-                  static TLS_CONNECTOR: tokio_rustls::TlsConnector = {
-                    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
-                      crate::tls::crypto::default_provider(),
-                    ))
-                    .with_safe_default_protocol_versions()
-                    .expect("cannot build tls client config with default protocol versions")
-                    .with_native_roots()
-                    .expect("cannot build tls client config with native roots")
-                    .with_no_client_auth();
-
-                    tokio_rustls::TlsConnector::from(Arc::new(config))
-                  };
-
-                  &*TLS_CONNECTOR
-                }
-              };
-
-              upstream
-                .state_attempted_connections
-                .fetch_add(1, Ordering::AcqRel);
-              let open_connections_guard =
-                increment_open_connections(upstream.state_open_connections.clone());
-
-              let tls_stream = match tls_connector.connect(server_name, proxy_stream).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                  last_error = Some(ProxyStreamError::TlsConnect(e));
-                  continue 'upstreams;
-                }
-              };
-
-              let proxy_io = TimeoutIo::new(tls_stream, proxy_read_timeout, proxy_write_timeout);
-              tokio::pin!(proxy_io);
-
-              let r = copy(&mut io, &mut proxy_io).await;
-
-              drop(open_connections_guard);
-
-              return r;
-            }
-
-            _ => unreachable!(),
-          }
-        }
-
-        other => {
-          return Err(ProxyStreamError::UnsupportedScheme(other.to_string()));
+          return r;
         }
       }
     }

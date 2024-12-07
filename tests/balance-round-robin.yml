@@ -24,25 +24,27 @@ stream:
           - origin: tcp://127.0.0.1:20352
             weight: 30
 
-    # stream do not yet have support for health checks
-    # - listen:
-    #     - addr: 20321
-    #   proxy:
-    #     balance: round-robin
-    #     upstream:
-    #       # unhealthy
-    #       - origin: tcp://127.0.0.1:20370
-    #         weight: 10
-    #       - origin: tcp://127.0.0.1:20371
-    #         weight: 50
+    # stream do not enable healthchecks by default
+    - listen:
+        - addr: 20321
+      healthcheck: 
+        interval: 1s
+      proxy:
+        balance: round-robin
+        upstream:
+          # unhealthy
+          - origin: tcp://127.0.0.1:20370
+            weight: 10
+          - origin: tcp://127.0.0.1:20371
+            weight: 50
 
-    #       # healthy
-    #       - origin: tcp://127.0.0.1:20350
-    #         weight: 10
-    #       - origin: tcp://127.0.0.1:20351
-    #         weight: 20
-    #       - origin: tcp://127.0.0.1:20352
-    #         weight: 30
+          # healthy
+          - origin: tcp://127.0.0.1:20350
+            weight: 10
+          - origin: tcp://127.0.0.1:20351
+            weight: 20
+          - origin: tcp://127.0.0.1:20352
+            weight: 30
 
 
 http:

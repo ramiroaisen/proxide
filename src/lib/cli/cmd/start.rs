@@ -17,13 +17,19 @@ use crate::{
     self,
     defaults::{
       DEFAULT_HTTP_SERVER_READ_TIMEOUT, DEFAULT_HTTP_SERVER_WRITE_TIMEOUT,
-      DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT,
+      DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT,
+      DEFAULT_PROXY_TCP_NODELAY, DEFAULT_STREAM_PROXY_READ_TIMEOUT,
+      DEFAULT_STREAM_PROXY_WRITE_TIMEOUT,
     },
     server_name::ServerName,
-    Config, HttpApp, HttpHandle,
+    Config, HttpApp, HttpHandle, StreamHandle,
   },
   net::bind,
-  proxy::{self, health::upstream_healthcheck_task, service::ProxyStreamService},
+  proxy::{
+    self,
+    health::{stream_upstream_healthcheck_task, upstream_healthcheck_task},
+    service::ProxyStreamService,
+  },
   proxy_protocol::ExpectProxyProtocol,
   serve::{serve_http, serve_https, serve_ssl, serve_tcp},
   tls::{cert_resolver::CertResolver, crypto, load_certs, load_private_key},
@@ -550,7 +556,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // args(and env) takes precedence over config
   let http_graceful_shutdown_timeout = crate::option!(
-    @timeout
+    @duration
     args.http.http_graceful_shutdown_timeout,
     config.http.graceful_shutdown_timeout,
     args.graceful_shutdown_timeout,
@@ -559,7 +565,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // args(and env) takes precedence over config
   let stream_graceful_shutdown_timeout = crate::option!(
-    @timeout
+    @duration
     args.stream.stream_graceful_shutdown_timeout,
     config.stream.graceful_shutdown_timeout,
     args.graceful_shutdown_timeout,
@@ -568,27 +574,27 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // global read timeout for http(s) servers
   let http_server_read_timeout = crate::option!(
-    @timeout
+    @duration
     config.http.server_read_timeout,
     => DEFAULT_HTTP_SERVER_READ_TIMEOUT
   );
 
   // global write timeout for http(s) servers
   let http_server_write_timeout = crate::option!(
-    @timeout
+    @duration
     config.http.server_write_timeout,
     => DEFAULT_HTTP_SERVER_WRITE_TIMEOUT
   );
 
   let http_proxy_protocol_read_timeout = crate::option!(
-    @timeout
+    @duration
     config.http.proxy_protocol_read_timeout,
     config.proxy_protocol_read_timeout,
     => DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT
   );
 
   let stream_proxy_protocol_read_timeout = crate::option!(
-    @timeout
+    @duration
     config.stream.proxy_protocol_read_timeout,
     config.proxy_protocol_read_timeout,
     => DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT
@@ -820,6 +826,109 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
     start_handle_heath(&config, app, &app.handle, &cancel_token)?;
   }
 
+  for app in &config.stream.apps {
+    match &app.handle {
+      StreamHandle::Proxy {
+        healthcheck: handle_healthcheck,
+        proxy_protocol_write_timeout: handle_proxy_protocol_write_timeout,
+        proxy_read_timeout: handle_proxy_read_timeout,
+        proxy_write_timeout: handle_proxy_write_timeout,
+        proxy_tcp_nodelay: handle_proxy_tcp_nodelay,
+        upstream,
+        state_round_robin_index: _,
+        ketama: _,
+        retries: _,
+        retry_backoff: _,
+        balance: _,
+      } => {
+        for upstream in upstream {
+          let healthcheck = crate::option!(
+            upstream.healthcheck,
+            *handle_healthcheck,
+            app.healthcheck,
+            config.stream.healthcheck,
+          );
+
+          let interval = match healthcheck {
+            Some(healthcheck) => healthcheck.interval.into(),
+            None => continue,
+          };
+
+          let proxy_tcp_nodelay = crate::option!(
+            upstream.proxy_tcp_nodelay,
+            *handle_proxy_tcp_nodelay,
+            app.proxy_tcp_nodelay,
+            config.stream.proxy_tcp_nodelay,
+            config.proxy_tcp_nodelay,
+            => DEFAULT_PROXY_TCP_NODELAY
+          );
+
+          let proxy_protocol_write_timeout = crate::option!(
+            @duration
+            upstream.proxy_protocol_write_timeout,
+            *handle_proxy_protocol_write_timeout,
+            config.stream.proxy_protocol_write_timeout,
+            config.proxy_protocol_write_timeout,
+            => DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT
+          );
+
+          let proxy_read_timeout = crate::option!(
+            @duration
+            upstream.proxy_read_timeout,
+            *handle_proxy_read_timeout,
+            app.proxy_read_timeout,
+            config.stream.proxy_read_timeout,
+            => DEFAULT_STREAM_PROXY_READ_TIMEOUT
+          );
+
+          let proxy_write_timeout = crate::option!(
+            @duration
+            upstream.proxy_write_timeout,
+            *handle_proxy_write_timeout,
+            app.proxy_write_timeout,
+            config.stream.proxy_write_timeout,
+            => DEFAULT_STREAM_PROXY_WRITE_TIMEOUT
+          );
+
+          let upstream_health = upstream.state_health.clone();
+          let cancelled = cancel_token.clone().cancelled_owned();
+
+          let scheme = upstream.origin.scheme();
+          let host = upstream.origin.host().to_owned();
+          let port = upstream.origin.port();
+
+          let url = format!("{}://{}:{}", scheme, host, port);
+
+          let sni = upstream.sni.clone();
+          let send_proxy_protocol = upstream.send_proxy_protocol;
+          let danger_accept_invalid_certs = upstream.danger_accept_invalid_certs;
+
+          tokio::spawn({
+            async move {
+              tokio::select! {
+                _ = cancelled => log::info!("received shutdown signal, stopping stream upstream healthcheck task for {url}"),
+                never = stream_upstream_healthcheck_task(
+                  interval,
+                  upstream_health,
+                  scheme,
+                  host,
+                  port,
+                  proxy_tcp_nodelay,
+                  proxy_read_timeout,
+                  proxy_write_timeout,
+                  send_proxy_protocol,
+                  proxy_protocol_write_timeout,
+                  sni,
+                  danger_accept_invalid_certs,
+                ) => match never {}
+              }
+            }
+          });
+        }
+      }
+    }
+  }
+
   // here all addresses are binded
   // let prev_pid = match std::fs::read_to_string(&config.pidfile) {
   //   Ok(prev_pid) => Some(prev_pid),
@@ -903,6 +1012,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
         match &app.handle {
           crate::config::StreamHandle::Proxy {
             upstream,
+            healthcheck: _,
             balance: _,
             ketama: _,
             retries: _,

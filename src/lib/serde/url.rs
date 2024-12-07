@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{fmt::Display, ops::Deref};
-use url::Url;
+use url::{Host, Url};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct HttpUpstreamBaseUrl(Url);
@@ -88,7 +88,43 @@ impl<'de> Deserialize<'de> for HttpUpstreamBaseUrl {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct StreamUpstreamOrigin(Url);
 
+impl StreamUpstreamOrigin {
+  pub fn port(&self) -> u16 {
+    self.0.port().unwrap()
+  }
+
+  pub fn host(&self) -> Host<&str> {
+    self.0.host().unwrap()
+  }
+
+  pub fn scheme(&self) -> StreamUpstreamScheme {
+    match self.0.scheme() {
+      "tcp" => StreamUpstreamScheme::Tcp,
+      "ssl" => StreamUpstreamScheme::Ssl,
+      "tls" => StreamUpstreamScheme::Tls,
+      _ => unreachable!(),
+    }
+  }
+}
+
 crate::json_schema_as!(StreamUpstreamOrigin => Url);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub enum StreamUpstreamScheme {
+  Tls,
+  Ssl,
+  Tcp,
+}
+
+impl std::fmt::Display for StreamUpstreamScheme {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      StreamUpstreamScheme::Tls => write!(f, "tls"),
+      StreamUpstreamScheme::Ssl => write!(f, "ssl"),
+      StreamUpstreamScheme::Tcp => write!(f, "tcp"),
+    }
+  }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StreamUpstreamOriginError {
@@ -96,6 +132,8 @@ pub enum StreamUpstreamOriginError {
   InvalidScheme(String),
   #[error("invalid tcp upstream origin, missing host")]
   MissingHost,
+  #[error("invalid tcp upstream origin, missing port")]
+  MissingPort,
   #[error("invalid tcp upstream origin, username is not supported")]
   UsernameNotSupported,
   #[error("invalid tcp upstream origin, password is not supported")]
@@ -117,6 +155,10 @@ impl TryFrom<Url> for StreamUpstreamOrigin {
 
     if url.host().is_none() {
       return Err(StreamUpstreamOriginError::MissingHost);
+    }
+
+    if url.port().is_none() {
+      return Err(StreamUpstreamOriginError::MissingPort);
     }
 
     if !url.username().is_empty() {

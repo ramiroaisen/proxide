@@ -1,10 +1,3 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::num::NonZeroU32;
-use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
-use std::sync::Arc;
-use std::time::Duration;
-
 use clap::Parser;
 use listen::Listen;
 use matcher::RequestMatcher;
@@ -13,6 +6,14 @@ use schemars::schema::RootSchema;
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use server_name::ServerName;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::num::NonZeroU32;
+use std::str::FromStr;
+#[cfg(feature = "stats")]
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::backoff::BackOff;
 #[cfg(any(
@@ -424,6 +425,9 @@ pub struct Stream {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub balance: Option<Balance>,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub healthcheck: Option<StreamHealthcheck>,
+
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub apps: Vec<StreamApp>,
 }
@@ -443,6 +447,7 @@ impl Stream {
         proxy_write_timeout: None,
         proxy_protocol_read_timeout: None,
         proxy_tcp_nodelay: None,
+        healthcheck: None,
         apps,
       } => apps.is_empty(),
 
@@ -526,6 +531,9 @@ pub struct StreamApp {
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_tcp_nodelay: Option<bool>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub healthcheck: Option<StreamHealthcheck>,
 
   #[serde(flatten)]
   pub handle: StreamHandle,
@@ -616,12 +624,6 @@ pub struct HttpUpstream {
   #[schemars(skip)]
   pub state_open_connections: Arc<AtomicUsize>,
 
-  /// This is the total number of connections that have been attempted to this upstream
-  /// this is used as the round-robin counter for the weighted RoundRobin balance algorithm
-  #[serde(skip_deserializing, default)]
-  #[schemars(skip)]
-  pub state_attempted_connections: Arc<AtomicU64>,
-
   #[serde(skip_deserializing, default)]
   #[schemars(skip)]
   #[cfg(feature = "stats")]
@@ -678,7 +680,6 @@ impl std::hash::Hash for HttpUpstream {
       weight: _,
       state_health: _,
       state_open_connections: _,
-      state_attempted_connections: _,
       #[cfg(feature = "stats")]
         stats_total_read_bytes: _,
       #[cfg(feature = "stats")]
@@ -749,15 +750,15 @@ pub struct StreamUpstream {
   #[serde(default)]
   pub danger_accept_invalid_certs: bool,
 
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub healthcheck: Option<StreamHealthcheck>,
+
+  #[serde(skip_deserializing, default = "arc_atomic_bool::<true>")]
+  pub state_health: Arc<AtomicBool>,
+
   #[serde(skip_deserializing, default)]
   #[schemars(skip)]
   pub state_open_connections: Arc<AtomicUsize>,
-
-  /// This is the total number of connections that have been attempted to this upstream
-  /// this is used as the round-robin counter for the weighted RoundRobin balance algorithm
-  #[serde(skip_deserializing, default)]
-  #[schemars(skip)]
-  pub state_attempted_connections: Arc<AtomicU64>,
 
   #[serde(skip_deserializing, default)]
   #[schemars(skip)]
@@ -787,9 +788,10 @@ impl std::hash::Hash for StreamUpstream {
       proxy_write_timeout,
       proxy_tcp_nodelay,
 
+      state_health: _,
+      healthcheck: _,
       weight: _,
       state_open_connections: _,
-      state_attempted_connections: _,
       #[cfg(feature = "stats")]
         stats_total_read_bytes: _,
       #[cfg(feature = "stats")]
@@ -836,6 +838,8 @@ pub enum StreamHandle {
     #[serde(default, skip_deserializing)]
     #[schemars(skip)]
     state_round_robin_index: Arc<AtomicUsize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    healthcheck: Option<StreamHealthcheck>,
     upstream: Vec<StreamUpstream>,
   },
 }
@@ -1065,6 +1069,11 @@ impl From<UpstreamVersion> for hyper::Version {
       UpstreamVersion::Http2 => hyper::Version::HTTP_2,
     }
   }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct StreamHealthcheck {
+  pub interval: SDuration,
 }
 
 #[cfg(any(

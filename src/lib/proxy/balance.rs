@@ -14,7 +14,6 @@ use nonzero::nonzero;
 pub trait BalanceTarget {
   fn is_active(&self) -> bool;
   fn open_connections(&self) -> usize;
-  fn attempted_connections(&self) -> u64;
   fn weight(&self) -> NonZeroU32;
 }
 
@@ -197,12 +196,6 @@ impl BalanceTarget for HttpUpstream {
       .load(std::sync::atomic::Ordering::Acquire)
   }
 
-  fn attempted_connections(&self) -> u64 {
-    self
-      .state_attempted_connections
-      .load(std::sync::atomic::Ordering::Acquire)
-  }
-
   fn weight(&self) -> NonZeroU32 {
     self.weight.unwrap_or(nonzero!(1u32))
   }
@@ -210,18 +203,12 @@ impl BalanceTarget for HttpUpstream {
 
 impl BalanceTarget for StreamUpstream {
   fn is_active(&self) -> bool {
-    true
+    self.state_health.load(std::sync::atomic::Ordering::Acquire)
   }
 
   fn open_connections(&self) -> usize {
     self
       .state_open_connections
-      .load(std::sync::atomic::Ordering::Acquire)
-  }
-
-  fn attempted_connections(&self) -> u64 {
-    self
-      .state_attempted_connections
       .load(std::sync::atomic::Ordering::Acquire)
   }
 

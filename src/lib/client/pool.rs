@@ -147,7 +147,7 @@ impl Key {
     let version = upstream.version.into();
 
     let read_timeout =crate::option!(
-      @timeout
+      @duration
       upstream.proxy_read_timeout,
       app.proxy_read_timeout,
       config.http.proxy_read_timeout
@@ -155,7 +155,7 @@ impl Key {
     );
 
     let write_timeout = crate::option!(
-      @timeout
+      @duration
       upstream.proxy_write_timeout,
       app.proxy_write_timeout,
       config.http.proxy_write_timeout
@@ -173,7 +173,7 @@ impl Key {
     let proxy_protocol_config = match upstream.send_proxy_protocol {
       Some(version) => {
         let timeout = crate::option!(
-          @timeout
+          @duration
           upstream.proxy_protocol_write_timeout,
           match app.handle {
             HttpHandle::Proxy { proxy_protocol_write_timeout, .. } => proxy_protocol_write_timeout,

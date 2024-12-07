@@ -4,4 +4,5 @@ pub mod error;
 pub mod header;
 pub mod health;
 pub mod service;
+pub mod stream;
 pub mod util;

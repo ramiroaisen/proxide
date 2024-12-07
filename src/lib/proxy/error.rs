@@ -202,15 +202,6 @@ pub enum ProxyStreamError {
   #[error("unresolvable upstream")]
   UnresolvableUpstream,
 
-  #[error("unsupported scheme: {0}")]
-  UnsupportedScheme(String),
-
-  #[error("url missing domain")]
-  UrlMissingDomain,
-
-  #[error("url missing port")]
-  UrlMissingPort,
-
   #[error("invalid server name")]
   InvalidServerName(#[from] rustls::pki_types::InvalidDnsNameError),
 

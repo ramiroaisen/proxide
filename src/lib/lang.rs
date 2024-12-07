@@ -58,40 +58,40 @@ macro_rules! option {
   };
 
   // timeout
-  // @timeout one item
-  (@timeout $head:expr $(,)?) => {
+  // @duration one item
+  (@duration $head:expr $(,)?) => {
     match $head {
       Some(v) => Some(Duration::from(v)),
       None => None,
     }
   };
 
-  // @timeout two or more items
-  (@timeout $head:expr, $($tail:expr),* $(,)?) => {
+  // @duration two or more items
+  (@duration $head:expr, $($tail:expr),* $(,)?) => {
     match $head {
       Some(v) => Some(Duration::from(v)),
-      None => $crate::option!(@timeout $($tail),*),
+      None => $crate::option!(@duration $($tail),*),
     }
   };
 
-  // @timeout one item with upfront default
-  (@timeout $head:expr $(,)? => $default:expr) => {
-    $crate::option!(@timeout $head).unwrap_or($default)
+  // @duration one item with lazy default
+  (@duration $head:expr $(,)? => || $default:expr) => {
+    $crate::option!(@duration $head).unwrap_or_else(|| $default)
   };
 
-  // @timeout two or more items with upfront default
-  (@timeout $head:expr, $($tail:expr),* $(,)? => $default:expr) => {
-    $crate::option!(@timeout $head, $($tail),*).unwrap_or($default)
+  // @duration two or more items with lazy default
+  (@duration $head:expr, $($tail:expr),* $(,)? => || $default:expr) => {
+    $crate::option!(@duration $head, $($tail),*).unwrap_or_else(|| $default)
   };
 
-  // @timeout one item with lazy default
-  (@timeout $head:expr $(,)? => || $default:expr) => {
-    $crate::option!(@timeout $head).unwrap_or_else(|| $default)
+  // @duration one item with upfront default
+  (@duration $head:expr $(,)? => $default:expr) => {
+    $crate::option!(@duration $head).unwrap_or($default)
   };
 
-  // @timeout two or more items with lazy default
-  (@timeout $head:expr, $($tail:expr),* $(,)? => || $default:expr) => {
-    $crate::option!(@timeout $head, $($tail),*).unwrap_or_else(|| $default)
+  // @duration two or more items with upfront default
+  (@duration $head:expr, $($tail:expr),* $(,)? => $default:expr) => {
+    $crate::option!(@duration $head, $($tail),*).unwrap_or($default)
   };
 }
 
