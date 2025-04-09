@@ -1042,7 +1042,7 @@ pub async fn serve_proxy(
               Err(mut e) => {
                 log::warn!("proxy request error: {e} {e:?}");
                 upstream.state_health.store(false, Ordering::Release);
-                match e.request_mut().take() {
+                match e.request_mut() {
                   Some(proxy_request_ref) => {
                     let mut body = Body::empty();
                     std::mem::swap(&mut body, proxy_request_ref.body_mut());

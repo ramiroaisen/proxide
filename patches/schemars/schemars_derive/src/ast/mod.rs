@@ -54,7 +54,7 @@ impl<'a> Container<'a> {
     self.serde_attrs.name().deserialize_name()
   }
 
-  pub fn transparent_field(&'a self) -> Option<&'a Field> {
+  pub fn transparent_field(&self) -> Option<&Field> {
     if self.serde_attrs.transparent() {
       if let Data::Struct(_, fields) = &self.data {
         return Some(&fields[0]);

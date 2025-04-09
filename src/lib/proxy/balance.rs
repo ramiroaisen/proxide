@@ -121,7 +121,7 @@ pub fn balance_sort<'a, U: BalanceTarget>(
             .iter()
             .enumerate()
             .flat_map(|(i, up)| {
-              std::iter::repeat(i).take((up.weight().get() / divisor.get()) as usize)
+              std::iter::repeat_n(i, (up.weight().get() / divisor.get()) as usize)
             })
             .collect::<Vec<_>>();
 

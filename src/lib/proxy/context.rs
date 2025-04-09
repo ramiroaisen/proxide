@@ -24,6 +24,7 @@ impl HttpInterpolation {
   }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'var, 'context> Interpolation<'var, 'context> for HttpInterpolation {
   type Var = HttpVar;
   type Context = HttpContext<'context>;

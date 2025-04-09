@@ -141,7 +141,7 @@ fn reload() {
         _ => ("http", 25100, "stream-1"),
       };
       let res = client
-        .get(&format!("{scheme}://127.0.0.1:{port}"))
+        .get(format!("{scheme}://127.0.0.1:{port}"))
         .send()
         .await
         .unwrap();
@@ -170,7 +170,7 @@ fn reload() {
         _ => ("http", 25100, "stream-2"),
       };
       let res = client
-        .get(&format!("{scheme}://127.0.0.1:{port}"))
+        .get(format!("{scheme}://127.0.0.1:{port}"))
         .send()
         .await
         .unwrap();

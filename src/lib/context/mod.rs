@@ -9,7 +9,7 @@ pub trait Variable<'a>: Sized {
   fn render(&self, buf: &mut String, context: &Self::Context) -> Result<(), Self::RenderErr>;
 }
 
-impl<'a> Variable<'a> for String {
+impl Variable<'_> for String {
   type FromExprErr = Infallible;
   fn from_expr(expr: &str) -> Result<Self, Self::FromExprErr> {
     Ok(expr.to_string())

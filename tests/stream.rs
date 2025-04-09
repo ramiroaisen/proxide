@@ -21,7 +21,7 @@ fn stream() {
 
         for _ in 0..1000 {
           let res = client
-            .get(&format!("{front_scheme}://127.0.0.1:{port}/"))
+            .get(format!("{front_scheme}://127.0.0.1:{port}/"))
             .send()
             .await
             .unwrap();

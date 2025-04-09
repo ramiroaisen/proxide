@@ -28,11 +28,10 @@ pub struct GracefulShutdown {
   _rx: watch::Receiver<()>,
 }
 
-
 impl GracefulShutdown {
   /// Create a new graceful shutdown helper.
   pub fn new() -> Self {
-    let (tx, rx ) = watch::channel(());
+    let (tx, rx) = watch::channel(());
     Self { tx, _rx: rx }
   }
 
@@ -46,7 +45,7 @@ impl GracefulShutdown {
     })
   }
 
-  pub fn guard<T>(&self, inner: T) -> GracefulGuard<T> { 
+  pub fn guard<T>(&self, inner: T) -> GracefulGuard<T> {
     GracefulGuard {
       inner,
       guard: self.tx.subscribe(),
@@ -169,7 +168,7 @@ where
   }
 }
 
-impl<'a, I, B, S, E> GracefulConnection for hyper_util::server::conn::auto::Connection<'a, I, S, E>
+impl<I, B, S, E> GracefulConnection for hyper_util::server::conn::auto::Connection<'_, I, S, E>
 where
   S: hyper::service::Service<http::Request<hyper::body::Incoming>, Response = http::Response<B>>,
   S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
@@ -186,8 +185,8 @@ where
   }
 }
 
-impl<'a, I, B, S, E> GracefulConnection
-  for hyper_util::server::conn::auto::UpgradeableConnection<'a, I, S, E>
+impl<I, B, S, E> GracefulConnection
+  for hyper_util::server::conn::auto::UpgradeableConnection<'_, I, S, E>
 where
   S: hyper::service::Service<http::Request<hyper::body::Incoming>, Response = http::Response<B>>,
   S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
@@ -238,7 +237,7 @@ mod private {
   {
   }
 
-  impl<'a, I, B, S, E> Sealed for hyper_util::server::conn::auto::Connection<'a, I, S, E>
+  impl<I, B, S, E> Sealed for hyper_util::server::conn::auto::Connection<'_, I, S, E>
   where
     S: hyper::service::Service<http::Request<hyper::body::Incoming>, Response = http::Response<B>>,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
@@ -250,7 +249,7 @@ mod private {
   {
   }
 
-  impl<'a, I, B, S, E> Sealed for hyper_util::server::conn::auto::UpgradeableConnection<'a, I, S, E>
+  impl<I, B, S, E> Sealed for hyper_util::server::conn::auto::UpgradeableConnection<'_, I, S, E>
   where
     S: hyper::service::Service<http::Request<hyper::body::Incoming>, Response = http::Response<B>>,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
