@@ -42,6 +42,12 @@ pub fn balance_sort<'a, U: BalanceTarget>(
             }
           }
 
+          inactive.sort_by_key(|up| std::cmp::Reverse(up.weight()));
+
+          if active.is_empty() {
+            return inactive;
+          }
+
           let divisor = {
             let mut divisor = nonzero!(1u32);
             for up in &active {
@@ -79,8 +85,6 @@ pub fn balance_sort<'a, U: BalanceTarget>(
               active_with_counter[idx].1 += 1;
             }
           }
-
-          inactive.sort_by_key(|up| std::cmp::Reverse(up.weight()));
 
           active_with_counter
             .into_iter()
