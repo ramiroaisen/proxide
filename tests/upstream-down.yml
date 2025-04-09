@@ -4,7 +4,7 @@ http:
     
   apps:
     - listen:
-        - addr: 21600
+        - addr: 21605
       when:
         - match:
             path: { exact: /balance-round-robin }
