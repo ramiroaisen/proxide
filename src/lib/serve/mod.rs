@@ -183,9 +183,8 @@ pub async fn serve_http<M, S, B, Sig>(
             let (stream, remote_addr) = match accept {
               Ok(accept) => accept,
               Err(e) => {
-                log::error!("error accepting tcp stream (tcp) - sleeping for 1 second: {e}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
+                log::error!("error accepting tcp stream (tcp) {e}, panicking");
+                panic!("error accepting tcp stream (tcp) {e}");
               }
             };
 
@@ -334,9 +333,8 @@ pub async fn serve_https<M, S, B, Sig>(
             let (tcp_stream, remote_addr) = match accept {
               Ok(accept) => accept,
               Err(e) => {
-                log::error!("error accepting tcp stream in https mode - sleeping for 1 second: {e}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
+                log::error!("error accepting tcp stream in https mode {e}, panicking");
+                panic!("error accepting tcp stream in https mode {e}");
               }
             };
 
@@ -465,9 +463,8 @@ pub async fn serve_tcp<S, Sig>(
             let (stream, remote_addr) = match accept {
               Ok(accept) => accept,
               Err(e) => {
-                log::error!("error accepting tcp stream in tcp mode - sleeping for 1 second: {e}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                continue;
+                log::error!("error accepting tcp stream in tcp mode {e}, panicking");
+                panic!("error accepting tcp stream in tcp mode {e}");
               }
             };
 
@@ -561,9 +558,8 @@ pub async fn serve_ssl<S, Sig>(
           let (mut tcp_stream, remote_addr) = match accept {
             Ok(accept) => accept,
             Err(e) => {
-              log::error!("error accepting tcp stream in ssl mode - sleeping for 1 second: {e}");
-              tokio::time::sleep(Duration::from_secs(1)).await;
-              continue;
+              log::error!("error accepting tcp stream in ssl mode {e}, panicking");
+              panic!("error accepting tcp stream in ssl mode {e}");
             }
           };
 
