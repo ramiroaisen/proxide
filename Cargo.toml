@@ -25,6 +25,7 @@ full = [
   "interpolation",
   "compression-all-algos",
   "serve-static",
+  "h3",
   # "stats",
 ]
 serve-static = []
@@ -49,6 +50,7 @@ log-error = ["log/release_max_level_error"]
 log-warn = ["log/release_max_level_warn"]
 log-info = ["log/release_max_level_info"]
 log-debug = ["log/release_max_level_debug"]
+h3 = ["dep:h3", "dep:h3-quinn", "dep:quinn", "dep:quinn-proto"]
 # add aws_lc_rs support for windows
 # ring = [ "rustls/ring" ]
 # aws_lc_rs = [ "rustls/aws_lc_rs" ]
@@ -116,6 +118,10 @@ headers = "0.4.0"
 crc32fast = "1.4.2"
 nonzero = "0.2.0"
 gcd = "2.3.0"
+h3 = { version = "0.0.8", optional = true, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
+h3-quinn = { version = "0.0.10", optional = true }
+quinn = { version = "0.11.7", features = ["ring", "rustls", "rustls-ring"], optional = true, default-features = false }
+quinn-proto = { version = "0.11.12", optional = true }
 
 [dev-dependencies]
 axum = "0.7.9"

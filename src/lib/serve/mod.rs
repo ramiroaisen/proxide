@@ -9,6 +9,7 @@ use hyper_util::{
 };
 use indexmap::IndexSet;
 use parking_lot::Mutex;
+use quinn::crypto::rustls::NoInitialCipherSuite;
 use rustls::ServerConfig;
 use std::future::Future;
 use std::{
@@ -27,15 +28,24 @@ use tokio_util::time::FutureExt;
 use crate::{
   graceful::GracefulGuard,
   net::timeout::TimeoutIo,
-  proxy::service::MakeHttpService,
+  proxy::service::{HttpConnectionKind, MakeHttpService},
   proxy_protocol::{ExpectProxyProtocol, ProxyHeader},
   service::{Connection, StreamService},
 };
+
+#[cfg(feature = "h3")]
+use futures_util::stream::StreamExt;
+#[cfg(feature = "h3")]
+use h3_quinn;
+#[cfg(feature = "h3")]
+use h3_quinn::quinn::{Endpoint, TransportConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ConnectionKind {
   Http,
   Https,
+  #[cfg(feature = "h3")]
+  H3,
   Ssl,
   Tcp,
 }
@@ -45,6 +55,8 @@ impl Display for ConnectionKind {
     match self {
       ConnectionKind::Http => write!(f, "http"),
       ConnectionKind::Https => write!(f, "https"),
+      #[cfg(feature = "h3")]
+      ConnectionKind::H3 => write!(f, "h3"),
       ConnectionKind::Ssl => write!(f, "ssl"),
       ConnectionKind::Tcp => write!(f, "tcp"),
     }
@@ -67,7 +79,7 @@ pub struct ConnectionItem {
 impl ConnectionItem {
   fn new(ip: IpAddr, kind: ConnectionKind) -> Self {
     Self {
-      uid: CONNECTION_UID.fetch_add(1, Ordering::Release),
+      uid: CONNECTION_UID.fetch_add(1, Ordering::AcqRel),
       ip,
       kind,
       since: Instant::now(),
@@ -99,23 +111,35 @@ pub fn log_ip_connections() {
   let connections = CONNECTIONS.lock();
   let mut total_https = 0;
   let mut total_http = 0;
+  #[cfg(feature = "h3")]
+  let mut total_h3 = 0;
   let mut total_ssl = 0;
   let mut total_tcp = 0;
   for connection in connections.iter() {
     match connection.kind {
       ConnectionKind::Http => total_http += 1,
       ConnectionKind::Https => total_https += 1,
+      #[cfg(feature = "h3")]
+      ConnectionKind::H3 => total_h3 += 1,
       ConnectionKind::Ssl => total_ssl += 1,
       ConnectionKind::Tcp => total_tcp += 1,
     }
   }
 
   log::info!(
+    #[cfg(feature = "h3")]
+    "= server connections - https: {} -  http: {} - h3: {} - ssl: {} - tcp: {} | total: {} =",
+    #[cfg(not(feature = "h3"))]
     "= server connections - https: {} -  http: {} - ssl: {} - tcp: {} | total: {} =",
     total_https,
     total_http,
+    #[cfg(feature = "h3")]
+    total_h3,
     total_ssl,
     total_tcp,
+    #[cfg(feature = "h3")]
+    total_https + total_http + total_h3 + total_ssl + total_tcp
+    #[cfg(not(feature = "h3"))]
     total_https + total_http + total_ssl + total_tcp
   );
 
@@ -255,7 +279,12 @@ pub async fn serve_http<M, S, B, Sig>(
         write_timeout,
       )));
 
-      let service = make_service.make_service(local_addr, remote_addr, false, proxy_header);
+      let service = make_service.make_service(
+        local_addr,
+        remote_addr,
+        HttpConnectionKind::Http,
+        proxy_header,
+      );
       let conn = http
         .serve_connection_with_upgrades(io, service)
         .into_owned();
@@ -405,7 +434,12 @@ pub async fn serve_https<M, S, B, Sig>(
         write_timeout,
       )));
 
-      let service = make_service.make_service(local_addr, remote_addr, true, proxy_header);
+      let service = make_service.make_service(
+        local_addr,
+        remote_addr,
+        HttpConnectionKind::Https,
+        proxy_header,
+      );
       let conn = http
         .serve_connection_with_upgrades(io, service)
         .into_owned();
@@ -436,6 +470,133 @@ pub async fn serve_https<M, S, B, Sig>(
   };
 
   tokio::join!(connection_task, accept_task);
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum H3ServeError {
+  #[error("failed to convert rustls ServerConfig to quinn::crypto::rustls::QuicServerConfig: {0}")]
+  QuicConfigFrom(#[from] NoInitialCipherSuite),
+
+  #[error("failed to bind QUIC endpoint: {0}")]
+  EndpointBind(#[source] std::io::Error),
+}
+
+#[cfg(feature = "h3")]
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_h3<M, S, B, Sig>(
+  local_addr: SocketAddr,
+  tls_config: Arc<ServerConfig>,
+  make_service: M,
+  signal: Sig,
+  graceful_shutdown_timeout: Option<Duration>,
+) -> Result<(), H3ServeError>
+where
+  M: MakeHttpService<Service = S> + Clone + Send + 'static,
+  S: Clone + Service<Request<Incoming>, Response = Response<B>> + Send + 'static,
+  <S as Service<Request<Incoming>>>::Future: Send + 'static,
+  <S as Service<Request<Incoming>>>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+  S: HttpService<Incoming, ResBody = B>,
+  <S as HttpService<Incoming>>::Future: Send + 'static,
+  <S as HttpService<Incoming>>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+  B: Body + Send + 'static,
+  B::Data: Send,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+  Sig: Future<Output = ()>,
+{
+  // Build QUIC endpoint from rustls ServerConfig
+
+  let mut transport = TransportConfig::default();
+  let mut server_cfg = h3_quinn::quinn::ServerConfig::with_crypto(Arc::new(
+    quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)?,
+  ));
+
+  server_cfg.transport = Arc::new(transport);
+
+  let endpoint = h3_quinn::quinn::Endpoint::server(server_cfg, local_addr)
+    .map_err(H3ServeError::EndpointBind)?;
+
+  tokio::pin!(signal);
+
+  loop {
+    use bytes::Bytes;
+
+    tokio::select! {
+      incomming = endpoint.accept() => {
+        if let Some(conn_fut) = incomming {
+          let remote_addr = conn_fut.remote_address();
+          let make_service = make_service.clone();
+          tokio::spawn(async move {
+            match conn_fut.await {
+              Ok(conn) => {
+                let mut h3_conn = match h3::server::Connection::<_, Bytes>::new(h3_quinn::Connection::new(conn)).await {
+                  Ok(conn) => conn,
+                  Err(err) => {
+                    log::warn!("error creating h3 connection: {err} - {err:?}");
+                    return;
+                  }
+                };
+
+                loop {
+                  match h3_conn.accept().await {
+                    Ok(Some(resolver)) => {
+                      let make_service = make_service.clone();
+                      tokio::spawn(async move {
+                        let (req, mut stream) = match resolver.resolve_request().await {
+                          Ok(req) => req,
+                          Err(err) => {
+                            log::warn!("error resolving h3 request: {err} - {err:?}");
+                            return;
+                          }
+                        };
+
+                        let service = make_service.make_service(
+                          local_addr,
+                          remote_addr,
+                          HttpConnectionKind::H3,
+                          None,
+                        );
+
+                        let res = service.call(req).await;
+                      });
+                    }
+                    // Connection closed
+                    Ok(None) => break,
+                    // Error accepting request
+                    Err(err) => {
+                      log::warn!("error accepting h3 request: {err} - {err:?}");
+                      break;
+                    }
+                  }
+                }
+              }
+              Err(err) => {
+                log::warn!("failed establishing quic connection: {err:?}");
+              }
+            }
+          });
+        } else {
+          // Endpoint is closed
+          break;
+        }
+      }
+
+      _ = &mut signal => break,
+    }
+  }
+
+  if let Some(timeout) = graceful_shutdown_timeout {
+    tokio::select! {
+      _ = tokio::time::sleep(timeout) => {
+        log::info!("graceful shutdown timeout ({}s) reached for h3 server", timeout.as_secs());
+      }
+
+      _ = endpoint.wait_idle() => {
+        log::info!("h3 server endpoint is idle, shutting down");
+      }
+    }
+  }
+
+  Ok(())
 }
 
 pub async fn serve_tcp<S, Sig>(

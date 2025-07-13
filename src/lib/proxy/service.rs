@@ -74,7 +74,7 @@ pub fn resolve_upstream_app<'a>(
   host: &str,
   config: &'a Config,
   bind_addr: SocketAddr,
-  bind_ssl: bool,
+  connection_kind: HttpConnectionKind,
 ) -> Option<&'a HttpApp> {
   for app in &config.http.apps {
     for listen in &app.listen {
@@ -82,8 +82,12 @@ pub fn resolve_upstream_app<'a>(
         continue;
       }
 
-      if listen.ssl.is_some() != bind_ssl {
-        continue;
+      match (&listen.ssl, connection_kind) {
+        (Some(_), HttpConnectionKind::Https | HttpConnectionKind::H3) => {}
+        (None, HttpConnectionKind::Http) => {}
+        _ => {
+          continue;
+        }
       }
 
       match app.server_names.as_ref() {
@@ -153,7 +157,7 @@ pub async fn serve_proxy(
   local_addr: SocketAddr,
   remote_addr: SocketAddr,
   proxy_header: Option<ProxyHeader>,
-  is_ssl: bool,
+  connection_kind: HttpConnectionKind,
 ) -> Result<Response<Body>, ProxyHttpError> {
   #[cfg(feature = "access-log")]
   let start = std::time::Instant::now();
@@ -190,7 +194,7 @@ pub async fn serve_proxy(
 
   #[cfg(feature = "interpolation")]
   let ctx = HttpContext {
-    is_ssl,
+    connection_kind,
     host: &host,
     port,
     method: &request_method,
@@ -206,7 +210,7 @@ pub async fn serve_proxy(
     request_x_forwarded_port: request_x_forwarded_port.as_ref(),
   };
 
-  let app = match resolve_upstream_app(&host, config, local_addr, is_ssl) {
+  let app = match resolve_upstream_app(&host, config, local_addr, connection_kind) {
     Some(app) => app,
     None => {
       return Err(ProxyHttpError::UnresolvedApp);
@@ -1134,7 +1138,7 @@ pub async fn serve_proxy(
         remote_addr = remote_addr,
         local_addr = local_addr,
         method = request_method,
-        scheme = if is_ssl { "https" } else { "http" },
+        scheme = if connection_kind.is_ssl() { "https" } else { "http" },
         host = host,
         port = DisplayPort(port),
         path = DisplayOption(request_uri.path_and_query()),
@@ -1155,7 +1159,7 @@ pub async fn serve_proxy(
                 remote_addr = remote_addr,
                 local_addr = local_addr,
                 method = request_method,
-                scheme = if is_ssl { "https" } else { "http" },
+                scheme = if connection_kind.is_ssl() { "https" } else { "http" },
                 host = host,
                 port = DisplayPort(port),
                 path = DisplayOption(request_uri.path_and_query()),
@@ -1427,13 +1431,27 @@ async fn copy<A: AsyncRead + AsyncWrite + Unpin, B: AsyncRead + AsyncWrite + Unp
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HttpConnectionKind {
+  Http,
+  Https,
+  #[cfg(feature = "h3")]
+  H3,
+}
+
+impl HttpConnectionKind {
+  pub fn is_ssl(&self) -> bool {
+    matches!(self, Self::Https | Self::H3)
+  }
+}
+
 pub trait MakeHttpService {
   type Service: Service<Request<Incoming>>;
   fn make_service(
     &self,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
-    ssl: bool,
+    connection_kind: HttpConnectionKind,
     proxy_header: Option<ProxyHeader>,
   ) -> Self::Service;
 }
@@ -1456,14 +1474,14 @@ impl MakeHttpService for HttpMakeService {
     &self,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
-    ssl: bool,
+    connection_kind: HttpConnectionKind,
     proxy_header: Option<ProxyHeader>,
   ) -> Self::Service {
     HttpService::new(
       self.config.clone(),
       local_addr,
       remote_addr,
-      ssl,
+      connection_kind,
       proxy_header,
     )
   }
@@ -1474,7 +1492,7 @@ pub struct HttpService {
   config: Arc<Config>,
   local_addr: SocketAddr,
   remote_addr: SocketAddr,
-  ssl: bool,
+  connection_kind: HttpConnectionKind,
   proxy_header: Option<ProxyHeader>,
 }
 
@@ -1490,14 +1508,14 @@ impl HttpService {
     config: Arc<Config>,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
-    ssl: bool,
+    connection_kind: HttpConnectionKind,
     proxy_header: Option<ProxyHeader>,
   ) -> Self {
     Self {
       config,
       local_addr,
       remote_addr,
-      ssl,
+      connection_kind,
       proxy_header,
     }
   }
@@ -1513,13 +1531,22 @@ impl Service<Request<Incoming>> for HttpService {
       config,
       local_addr,
       remote_addr,
-      ssl,
+      connection_kind,
       proxy_header,
     } = self.clone();
     // we spawn here to avoid cancellation
     // this has almost no impact on performance and help to the predictability of the service as it avoids it being cancelled in-flight
     let handle = tokio::spawn(async move {
-      match serve_proxy(req, &config, local_addr, remote_addr, proxy_header, ssl).await {
+      match serve_proxy(
+        req,
+        &config,
+        local_addr,
+        remote_addr,
+        proxy_header,
+        connection_kind,
+      )
+      .await
+      {
         Ok(response) => Ok(response),
         Err(e) => {
           log::warn!("proxy ended with error: {e}");

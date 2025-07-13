@@ -8,6 +8,7 @@ use std::{convert::Infallible, net::SocketAddr};
 use crate::context::{Interpolation, Variable};
 use crate::interpolate::{render, tokens, Token};
 use crate::json_schema_as;
+use crate::proxy::service::HttpConnectionKind;
 use crate::proxy_protocol::ProxyHeader;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -112,7 +113,7 @@ impl<'de> Deserialize<'de> for HttpInterpolation {
 }
 
 pub struct HttpContext<'a> {
-  pub is_ssl: bool,
+  pub connection_kind: HttpConnectionKind,
   pub host: &'a str,
   pub port: Option<u16>,
   pub method: &'a hyper::Method,
@@ -130,11 +131,21 @@ pub struct HttpContext<'a> {
 
 macro_rules! var {
   ($f:ident, $ctx:ident, scheme) => {{
-    $f.push_str(if $ctx.is_ssl { "https" } else { "http" })
+    $f.push_str(match $ctx.connection_kind {
+      HttpConnectionKind::Http => "http",
+      HttpConnectionKind::Https => "https",
+      #[cfg(feature = "h3")]
+      HttpConnectionKind::H3 => "https",
+    })
   }};
 
   ($f:ident, $ctx:ident, proto) => {{
-    $f.push_str(if $ctx.is_ssl { "https" } else { "http" })
+    $f.push_str(match $ctx.connection_kind {
+      HttpConnectionKind::Http => "http",
+      HttpConnectionKind::Https => "https",
+      #[cfg(feature = "h3")]
+      HttpConnectionKind::H3 => "https",
+    })
   }};
 
   ($f:ident, $ctx:ident, host) => {{
@@ -234,7 +245,12 @@ macro_rules! var {
 
     // proto(self)
     $f.push_str(";proto=");
-    $f.push_str(if $ctx.is_ssl { "https" } else { "http" });
+    $f.push_str(match $ctx.connection_kind {
+      HttpConnectionKind::Http => "http",
+      HttpConnectionKind::Https => "https",
+      #[cfg(feature = "h3")]
+      HttpConnectionKind::H3 => "https",
+    });
 
     $f.push_str(";host=");
     $f.push_str($ctx.host);
@@ -354,7 +370,12 @@ macro_rules! var {
     // Eg: https,http
 
     // self
-    $f.push_str(if $ctx.is_ssl { "https" } else { "http" });
+    $f.push_str(match $ctx.connection_kind {
+      HttpConnectionKind::Http => "http",
+      HttpConnectionKind::Https => "https",
+      #[cfg(feature = "h3")]
+      HttpConnectionKind::H3 => "https",
+    });
 
     // header
     match &$ctx.request_x_forwarded_proto {
@@ -589,7 +610,7 @@ mod test {
   #[test]
   fn render_scheme() {
     let context = HttpContext {
-      is_ssl: true,
+      connection_kind: HttpConnectionKind::Https,
       host: "example.com",
       port: None,
       method: &Method::GET,
@@ -614,7 +635,7 @@ mod test {
   #[test]
   fn render_host() {
     let context = HttpContext {
-      is_ssl: false,
+      connection_kind: HttpConnectionKind::Http,
       host: "example.com",
       port: None,
       method: &Method::GET,
@@ -643,7 +664,7 @@ mod test {
     let request_x_forwarded_port = hv("443");
 
     let context = HttpContext {
-      is_ssl: false,
+      connection_kind: HttpConnectionKind::H3,
       host: "example.com",
       port: None,
       method: &Method::GET,
@@ -668,7 +689,7 @@ mod test {
   #[test]
   fn render_proto() {
     let context = HttpContext {
-      is_ssl: true,
+      connection_kind: HttpConnectionKind::Https,
       host: "example.com",
       port: None,
       method: &Method::GET,
@@ -692,7 +713,7 @@ mod test {
   fn render_request_uri() {
     let uri = Uri::from_static("/path?query=1");
     let context = HttpContext {
-      is_ssl: false,
+      connection_kind: HttpConnectionKind::H3,
       host: "example.com",
       port: Some(8080),
       method: &Method::POST,
@@ -714,8 +735,8 @@ mod test {
 
   #[test]
   fn render_forwarded() {
-    let context = HttpContext {
-      is_ssl: false,
+    let context: HttpContext<'_> = HttpContext {
+      connection_kind: HttpConnectionKind::Http,
       host: "example.com",
       port: Some(8080),
       method: &Method::POST,
@@ -757,7 +778,7 @@ mod test {
     let request_x_forwarded_port = hv("443");
 
     let context = HttpContext {
-      is_ssl: true,
+      connection_kind: HttpConnectionKind::Https,
       host: "example.com",
       port: Some(8080),
       method: &Method::POST,
@@ -810,7 +831,7 @@ mod test {
     let request_x_forwarded_port = hv("443");
 
     let ctx = HttpContext {
-      is_ssl: true,
+      connection_kind: HttpConnectionKind::Https,
       host: "example.com",
       port: Some(8080),
       method: &Method::POST,
@@ -899,7 +920,7 @@ mod test {
     ];
 
     let ctx = HttpContext {
-      is_ssl: false,
+      connection_kind: HttpConnectionKind::Http,
       host: "example.com",
       port: None,
       method: &Method::GET,
