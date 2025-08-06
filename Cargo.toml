@@ -25,6 +25,7 @@ full = [
   "interpolation",
   "compression-all-algos",
   "serve-static",
+  "h3-quinn",
   # "stats",
 ]
 serve-static = []
@@ -49,6 +50,8 @@ log-error = ["log/release_max_level_error"]
 log-warn = ["log/release_max_level_warn"]
 log-info = ["log/release_max_level_info"]
 log-debug = ["log/release_max_level_debug"]
+h3-quinn = ["dep:h3", "dep:h3-quinn", "dep:h3-util"]
+h3-msquic = ["dep:h3", "dep:h3-util"]
 # add aws_lc_rs support for windows
 # ring = [ "rustls/ring" ]
 # aws_lc_rs = [ "rustls/aws_lc_rs" ]
@@ -56,66 +59,70 @@ log-debug = ["log/release_max_level_debug"]
 [dependencies]
 rustls = { version = "0.23.12", default-features = false, features = [ "std", "tls12", "brotli", "zlib", "ring" ] }   
 # we only need hyper-rustls for the .with_native_roots() extension method on the rustls Config builder
-hyper-rustls = { version = "0.27.1", default-features = false, features = [ "rustls-native-certs" ] }
-tokio-rustls = { version = "0.26.0", default-features = false, features = [] }
-rustls-pemfile = "2.1.2"
-anyhow = "1.0.86"
-async-stream = "0.3.5"
-bytes = "1.6.0"
-futures = "0.3.30"
-http-body = "1.0.0"
-http-body-util = "0.1.1"
-hyper = { version = "1.5.1", features = ["full"] }
+hyper-rustls = { version = "0.27.7", default-features = false, features = [ "rustls-native-certs" ] }
+tokio-rustls = { version = "0.26.2", default-features = false, features = [] }
+rustls-pemfile = "2.2.0"
+anyhow = "1.0.98"
+async-stream = "0.3.6"
+bytes = "1.10.1"
+futures = "0.3.31"
+http-body = "1.0.1"
+http-body-util = "0.1.3"
+hyper = { version = "1.6.0", features = ["full"] }
 hyper-util = { version = "0.1.6", features = ["full"] }
-indexmap = { version = "2.2.6", features = ["serde"] }
-log = { version = "0.4.21", features = ["std"]} 
-once_cell = { version = "1.19.0", features = ["parking_lot"] }
-pin-project = "1.1.5"
-rand = "0.8.5"
-regex = "1.10.4"
+indexmap = { version = "2.10.0", features = ["serde"] }
+log = { version = "0.4.27", features = ["std"]} 
+once_cell = { version = "1.21.3", features = ["parking_lot"] }
+pin-project = "1.1.10"
+rand = "0.9.2"
+regex = "1.11.1"
 regex_static = "0.1.1"
-serde = { version = "1.0.203", features = ["derive", "rc"] }
-serde_json = { version = "1.0.117", features = ["preserve_order"] }
-thiserror = "1.0.61"
-tokio = { version = "1.37.0", features = ["full"] }
-tokio-util = { version = "0.7.11", features = ["full"] }
-toml = { version = "0.8.13", features = ["preserve_order"] }
-url = { version = "2.5.0", features = ["serde"] }
-tower = "0.4.13"
-parking_lot = { version = "0.12.3", features = ["arc_lock", "send_guard"] }
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.142", features = ["preserve_order"] }
+thiserror = "2.0.12"
+tokio = { version = "1.47.1", features = ["full"] }
+tokio-util = { version = "0.7.16", features = ["full"] }
+toml = { version = "0.9.5", features = ["preserve_order"] }
+url = { version = "2.5.4", features = ["serde"] }
+tower = { version = "0.4.13", features = ["util"] }
+parking_lot = { version = "0.12.4", features = ["arc_lock", "send_guard"] }
 derivative = "2.2.0"
-static_init = "1.0.3"
-time = { version = "0.3.36", features = ["local-offset"] }
-owo-colors = "4.0.0"
+static_init = "1.0.4"
+time = { version = "0.3.41", features = ["local-offset"] }
+owo-colors = "4.2.2"
 kanal = { version = "0.1.0-pre8", default-features = false, features = ["async"] }
-humantime = "2.1.0"
+humantime = "2.2.0"
 serde_yaml = "0.9.34"
-clap = { version = "4.5.4", features = ["derive", "env"] }
-socket2 = "0.5.7"
+clap = { version = "4.5.42", features = ["derive", "env"] }
+socket2 = { version = "0.5.7", features = ["all"] }
 futures-util = "0.3.30"
-http = "1.1.0"
-itertools = "0.13.0"
-console-subscriber = { version = "0.3.0", optional = true }
-chrono = { version = "0.4.38", default-features = false, features = ["now", "clock"] }
-async-compression = { version = "0.4.10", features = ["tokio"], optional = true }
+http = "1.3.1"
+itertools = "0.14.0"
+console-subscriber = { version = "0.4.1", optional = true }
+chrono = { version = "0.4.41", default-features = false, features = ["now", "clock"] }
+async-compression = { version = "0.4.27", features = ["tokio"], optional = true }
 proctitle = { version = "0.1.1", optional = true }
-human-panic = { version = "2.0.0", optional = true }
-rlimit = "0.10.1"
+human-panic = { version = "2.0.3", optional = true }
+rlimit = "0.10.2"
 schemars = { version = "0.8.21", features = ["url", "derive", "preserve_order", "indexmap2"] }
 base64 = "0.22.1"
 defer = "0.2.1"
 proxy-header = "0.1.2"
-nix = { version = "0.29.0", features = ["process", "signal"] }
+nix = { version = "0.30.1", features = ["process", "signal"] }
 rustls-pki-types = { version = "1.7.0", features = ["std"] }
-async-tungstenite = { version = "0.27.0", features = ["tokio", "tokio-runtime"] }
-const-str = "0.5.7"
-rustls-native-certs = "0.7.1"
+async-tungstenite = { version = "0.30.0", features = ["tokio", "tokio-runtime"] }
+const-str = "0.6.4"
+rustls-native-certs = "0.8.1"
 unwrap-infallible = "0.1.5"
 mime_guess = "2.0.5"
-headers = "0.4.0"
-crc32fast = "1.4.2"
+headers = "0.4.1"
+crc32fast = "1.5.0"
 nonzero = "0.2.0"
 gcd = "2.3.0"
+h3-util = { version = "0.0.4", optional = true }
+h3 = { version = "0.0.8", optional = true, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
+h3-quinn = { version = "0.0.10", optional = true }
+quinn = { version = "0.11.8", features = ["ring"] }
 
 [dev-dependencies]
 axum = "0.7.9"

@@ -1,11 +1,10 @@
 pub mod timeout;
 
-use socket2::{Domain, SockAddr, Socket, Type}; 
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 pub fn bind(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
-  
   let socket = if addr.is_ipv4() {
     Socket::new(Domain::IPV4, Type::STREAM, None)?
   } else {
@@ -37,7 +36,6 @@ pub fn bind(addr: SocketAddr) -> Result<TcpListener, std::io::Error> {
 //     .with_interval(interval)
 //     .with_retries(retries)
 //     .with_time(time);
-
 
 //   let socket_ref = SockRef::from(tcp);
 

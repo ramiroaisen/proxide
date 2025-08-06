@@ -125,7 +125,7 @@ pub fn balance_sort<'a, U: BalanceTarget>(
             })
             .collect::<Vec<_>>();
 
-          vec.shuffle(&mut rand::thread_rng());
+          vec.shuffle(&mut rand::rng());
 
           vec
             .into_iter()

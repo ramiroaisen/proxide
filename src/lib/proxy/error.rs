@@ -19,6 +19,14 @@ pub enum ProxyHttpError {
   #[error("hyper server error: {0}")]
   IncomingBody(#[source] hyper::Error),
 
+  #[cfg(feature = "h3-quinn")]
+  #[error("h3 quinn client body error: {0}")]
+  IncomingH3QuinnClientBody(#[source] h3::error::StreamError),
+
+  #[cfg(feature = "h3-quinn")]
+  #[error("h3 quinn server body error: {0}")]
+  IncomingH3QuinnServerBody(#[source] h3::error::StreamError),
+
   #[error("could not resolve proxy target")]
   UnresolvedApp,
 
@@ -109,6 +117,10 @@ impl ProxyHttpError {
       E::UpstreamUrlParse(_) => ErrorOriginator::User,
       E::InvalidHeaderInterpolation => ErrorOriginator::Config,
       E::IncomingBody(_) => ErrorOriginator::Io,
+      #[cfg(feature = "h3-quinn")]
+      E::IncomingH3QuinnClientBody(_) => ErrorOriginator::Io,
+      #[cfg(feature = "h3-quinn")]
+      E::IncomingH3QuinnServerBody(_) => ErrorOriginator::Io,
       E::CompressBodyChunk(_) => ErrorOriginator::Io,
       E::UpgradeIoBoth { .. } => ErrorOriginator::Io,
       E::UpgradeIoClient(_) => ErrorOriginator::Io,
@@ -144,6 +156,10 @@ impl ProxyHttpError {
       E::UpstreamUrlParse(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::InvalidHeaderInterpolation => StatusCode::INTERNAL_SERVER_ERROR,
       E::IncomingBody(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      #[cfg(feature = "h3-quinn")]
+      E::IncomingH3QuinnClientBody(_) => StatusCode::INTERNAL_SERVER_ERROR,
+      #[cfg(feature = "h3-quinn")]
+      E::IncomingH3QuinnServerBody(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::CompressBodyChunk(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::StatsSerialize(_) => StatusCode::INTERNAL_SERVER_ERROR,
       E::HeapProfileNotCompiled => StatusCode::SERVICE_UNAVAILABLE,

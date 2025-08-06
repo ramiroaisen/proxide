@@ -1,5 +1,5 @@
 use derivative::Derivative;
-use http::StatusCode;
+use http::{StatusCode, Uri};
 use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
 use hyper::client::conn;
@@ -8,7 +8,7 @@ use hyper_rustls::ConfigBuilderExt;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
-use rustls::{pki_types, ClientConfig};
+use rustls::pki_types;
 use tokio::io::AsyncWriteExt;
 use tokio_util::time::FutureExt;
 use url::Host;
@@ -51,6 +51,15 @@ type SenderMap = HashMap<Key, Arc<Mutex<SenderDeque>>>;
 
 type Http1SendRequest = conn::http1::SendRequest<Body>;
 type Http2SendRequest = conn::http2::SendRequest<Body>;
+pub struct Http3SendRequest {
+  conn: h3_util::client::H3Connection<h3_util::quinn::H3QuinnConnector, Body>,
+}
+
+impl std::fmt::Debug for Http3SendRequest {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Http3SendRequest").finish()
+  }
+}
 
 static CONNECTION_UID: AtomicUsize = AtomicUsize::new(0);
 
@@ -59,6 +68,7 @@ pub enum Version {
   Http10,
   Http11,
   Http2,
+  Http3,
 }
 
 impl From<UpstreamVersion> for Version {
@@ -67,6 +77,7 @@ impl From<UpstreamVersion> for Version {
       UpstreamVersion::Http10 => Version::Http10,
       UpstreamVersion::Http11 => Version::Http11,
       UpstreamVersion::Http2 => Version::Http2,
+      UpstreamVersion::Http3 => Version::Http3,
     }
   }
 }
@@ -214,31 +225,50 @@ impl Display for Key {
   }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReadyError {
+  #[error("http1 ready error: {0}")]
+  Http1(#[source] hyper::Error),
+  #[error("http2 ready error: {0}")]
+  Http2(#[source] hyper::Error),
+  #[error("http3 ready error: {0}")]
+  Http3(#[source] h3_util::Error),
+}
+
+
 #[derive(Debug)]
 pub enum SendRequest {
   Http1(Http1SendRequest),
   Http2(Http2SendRequest),
+  Http3(Http3SendRequest),
 }
 
 impl SendRequest {
-  pub fn is_ready(&self) -> bool {
+  pub fn is_ready(&self) -> Option<bool> {
     match self {
-      SendRequest::Http1(send) => send.is_ready(),
-      SendRequest::Http2(send) => send.is_ready(),
+      SendRequest::Http1(send) => Some(send.is_ready()),
+      SendRequest::Http2(send) => Some(send.is_ready()),
+      SendRequest::Http3(_) => None
     }
   }
 
-  pub fn is_closed(&self) -> bool {
+  pub fn is_closed(&self) -> Option<bool> {
     match self {
-      SendRequest::Http1(send) => send.is_closed(),
-      SendRequest::Http2(send) => send.is_closed(),
+      SendRequest::Http1(send) => Some(send.is_closed()),
+      SendRequest::Http2(send) => Some(send.is_closed()),
+      SendRequest::Http3(_) => None,
     }
   }
 
-  pub async fn ready(&mut self) -> Result<(), hyper::Error> {
+  pub async fn ready(&mut self) -> Result<(), ReadyError> {
+    use tower::ServiceExt;
     match self {
-      SendRequest::Http1(send) => send.ready().await,
-      SendRequest::Http2(send) => send.ready().await,
+      SendRequest::Http1(send) => send.ready().await.map_err(ReadyError::Http1),
+      SendRequest::Http2(send) => send.ready().await.map_err(ReadyError::Http2),
+      SendRequest::Http3(send) => {
+        let _ = send.conn.ready().await.map_err(ReadyError::Http3)?;
+        Ok(())
+      }
     }
   }
 }
@@ -249,7 +279,7 @@ pub struct Sender {
 }
 
 impl Sender {
-  pub async fn ready(&mut self) -> Result<(), hyper::Error> {
+  pub async fn ready(&mut self) -> Result<(), ReadyError> {
     self.send.ready().await
   }
 
@@ -261,213 +291,308 @@ impl Sender {
     write_counter: &Arc<AtomicU64>,
     weak: Weak<RwLock<SenderMap>>
   ) -> Result<Self, ConnectError> {
-    let connect = match &key.host {
-      Host::Domain(domain) => TcpStream::connect((domain.as_str(), key.port)).await,
-      Host::Ipv4(ipv4) => TcpStream::connect((*ipv4, key.port)).await,
-      Host::Ipv6(ipv6) => TcpStream::connect((*ipv6, key.port)).await,
-    };
-
-    let tcp = connect
-      .map_err(ConnectError::TcpConnect)?;
     
-    if key.tcp_nodelay {
-      tcp.set_nodelay(true)
-        .map_err(ConnectError::SetTcpNoDelay)?;
-    }
-    
-    #[cfg(feature = "stats")]
-    let mut tcp = CountersIo::new(tcp, read_counter.clone(), write_counter.clone());
+    match key.version {
+      Version::Http10 | 
+      Version::Http11 | 
+      Version::Http2 
+      => {
+      let connect = match &key.host {
+        Host::Domain(domain) => TcpStream::connect((domain.as_str(), key.port)).await,
+        Host::Ipv4(ipv4) => TcpStream::connect((*ipv4, key.port)).await,
+        Host::Ipv6(ipv6) => TcpStream::connect((*ipv6, key.port)).await,
+      };
 
-    #[cfg(not(feature = "stats"))]
-    let mut tcp = tcp;
+      let tcp = connect
+        .map_err(ConnectError::TcpConnect)?;
+      
+      if key.tcp_nodelay {
+        tcp.set_nodelay(true)
+          .map_err(ConnectError::SetTcpNoDelay)?;
+      }
+      
+      #[cfg(feature = "stats")]
+      let mut tcp = CountersIo::new(tcp, read_counter.clone(), write_counter.clone());
 
-    if let Some(proxy_protocol_config) = &key.proxy_protocol {
-      let buf = proxy_protocol::encode(
-        &proxy_protocol_config.header,
-        proxy_protocol_config.version,
-      ).map_err(ConnectError::ProxyProtocolEncode)?;
+      #[cfg(not(feature = "stats"))]
+      let mut tcp = tcp;
 
-      tcp.write_all(&buf)
-        .timeout(proxy_protocol_config.timeout)
-        .await
-        .map_err(|_| ConnectError::ProxyProtocolWriteTimeout)?
-        .map_err(ConnectError::ProxyProtocolWrite)?;
-    }
+      if let Some(proxy_protocol_config) = &key.proxy_protocol {
+        let buf = proxy_protocol::encode(
+          &proxy_protocol_config.header,
+          proxy_protocol_config.version,
+        ).map_err(ConnectError::ProxyProtocolEncode)?;
 
-    match key.protocol {
+        tcp.write_all(&buf)
+          .timeout(proxy_protocol_config.timeout)
+          .await
+          .map_err(|_| ConnectError::ProxyProtocolWriteTimeout)?
+          .map_err(ConnectError::ProxyProtocolWrite)?;
+      }
 
-      Protocol::Http => {
+      match key.protocol {
 
-        let io = Box::pin(TokioIo::new(TimeoutIo::new(tcp, key.read_timeout, key.write_timeout)));
-        
-        match key.version {
-          // for version http/1.0 the weak arc will always point to None
-          // so each connection will only be used by one request
-          Version::Http10 | Version::Http11 => {
-            let (conn_send, conn) = hyper::client::conn::http1::Builder::new()
-              .handshake(io)
-              .await
-              .map_err(ConnectError::TcpHandshake)?;
+        Protocol::Http => {
 
-            let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
-            log::debug!("tcp http1 connection {} established", uid);
+          let io = Box::pin(TokioIo::new(TimeoutIo::new(tcp, key.read_timeout, key.write_timeout)));
+          
+          match key.version {
+            // for version http/1.0 the weak arc will always point to None
+            // so each connection will only be used by one request
+            Version::Http10 |
+            Version::Http11
+             => {
+              let (conn_send, conn) = hyper::client::conn::http1::Builder::new()
+                .handshake(io)
+                .await
+                .map_err(ConnectError::TcpHandshake)?;
 
-            tokio::spawn(async move {
-              let _ = conn.with_upgrades().await;
-              log::debug!("tcp http1 connection {} closed", uid);
-              connection_end(weak, &key, uid);
-            });
+              let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
+              log::debug!("tcp http1 connection {} established", uid);
 
-            let send = SendRequest::Http1(conn_send);
-            let sender = Sender {
-              send,
-              uid,
-              // last_used: Instant::now(),
-            };
+              tokio::spawn(async move {
+                let _ = conn.with_upgrades().await;
+                log::debug!("tcp http1 connection {} closed", uid);
+                connection_end(weak, &key, uid);
+              });
 
-            Ok(sender)
+              let send = SendRequest::Http1(conn_send);
+              let sender = Sender {
+                send,
+                uid,
+                // last_used: Instant::now(),
+              };
+
+              Ok(sender)
+            }
+
+            Version::Http2 => {
+
+              let (conn_send, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+                .handshake(io)
+                .await
+                .map_err(ConnectError::TcpHandshake)?;
+
+              let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
+              log::debug!("tcp http2 connection {} established", uid);
+
+              tokio::spawn(async move {
+                let _ = conn.await;
+                log::debug!("tcp http2 connection {} closed", uid);
+                connection_end(weak, &key, uid);
+              });
+
+              let send = SendRequest::Http2(conn_send);
+              let sender = Sender {
+                send,
+                uid,
+                // last_used: Instant::now(),
+              };
+
+              Ok(sender)
+            }
+
+            Version::Http3 => {
+              unreachable!()
+            }
           }
+        }
 
-          Version::Http2 => {
+        Protocol::Https => {
 
-            let (conn_send, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-              .handshake(io)
-              .await
-              .map_err(ConnectError::TcpHandshake)?;
+          macro_rules! tls_config {
+              ($($alpn:tt)*) => {{
+                #[static_init::dynamic]
+                static TLS_CONFIG: Arc<rustls::ClientConfig> = {
+                  let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                    .with_safe_default_protocol_versions()
+                    .expect("cannot build tls client config with default protocols")
+                    .with_native_roots()
+                    .expect("cannot build tls client config with native roots")
+                    .with_no_client_auth();
 
-            let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
-            log::debug!("tcp http2 connection {} established", uid);
+                  config.enable_sni = true;
+                  config.alpn_protocols = vec![$($alpn.to_vec())*];
+                  
+                  Arc::new(config)
+                };
 
-            tokio::spawn(async move {
-              let _ = conn.await;
-              log::debug!("tcp http2 connection {} closed", uid);
-              connection_end(weak, &key, uid);
-            });
+                TLS_CONFIG.clone()
+              }}
+            }
 
-            let send = SendRequest::Http2(conn_send);
-            let sender = Sender {
-              send,
-              uid,
-              // last_used: Instant::now(),
+            macro_rules! danger_no_cert_verifier_tls_config {
+              ($($alpn:tt)*) => {{
+                #[static_init::dynamic]
+                static DANGER_NO_CERT_VERIFIER_TLS_CONFIG: Arc<rustls::ClientConfig> = {
+                  let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                    .with_safe_default_protocol_versions()
+                    .expect("cannot build tls client config with default protocols")
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
+                    .with_no_client_auth();
+
+                  config.enable_sni = true;
+                  config.alpn_protocols = vec![$($alpn.to_vec())*];
+
+                  Arc::new(config)
+                };
+
+                DANGER_NO_CERT_VERIFIER_TLS_CONFIG.clone()
+              }}
+            }
+
+
+            let tls_config = match (key.accept_invalid_certs, key.version) {
+              (true, Version::Http10) => danger_no_cert_verifier_tls_config!(b"http/1.0"),
+              (true, Version::Http11) => danger_no_cert_verifier_tls_config!(b"http/1.1"),
+              (true, Version::Http2) => danger_no_cert_verifier_tls_config!(b"h2"),
+              (false, Version::Http10) => tls_config!(b"http/1.0"),
+              (false, Version::Http11) => tls_config!(b"http/1.1"),
+              (false, Version::Http2) => tls_config!(b"h2"),
+              (_, Version::Http3) => unreachable!(),
             };
 
-            Ok(sender)
+            let tls_connector = tokio_rustls::TlsConnector::from(tls_config);
+            
+            let sni = match &key.sni {
+              Some(sni) => sni.0.clone(),
+              None => pki_types::ServerName::try_from(key.host.to_string())
+                .map_err( ConnectError::InvalidUriHost)?
+            };
+
+            let tls_stream = tls_connector.connect(sni, tcp)
+              .await
+              .map_err(ConnectError::TlsConnect)?;
+
+            let io = Box::pin(TimeoutIo::new(TokioIo::new(tls_stream), key.read_timeout, key.write_timeout));
+          
+            match key.version {
+              Version::Http10 |
+              Version::Http11
+              => {
+                let (conn_send, conn) = hyper::client::conn::http1::Builder::new()
+                  .handshake(io)
+                  .await
+                  .map_err(ConnectError::TcpHandshake)?;
+
+                let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
+                log::debug!("ssl http2 connection {} established", uid);
+
+                tokio::spawn(async move {
+                  let _ = conn.with_upgrades().await;
+                  log::debug!("ssl http2 connection {} closed", uid);
+                  connection_end(weak, &key, uid);
+                });
+
+                let send = SendRequest::Http1(conn_send);
+                let sender = Sender {
+                  send,
+                  uid,
+                  // last_used: Instant::now(),
+                };
+
+                Ok(sender)
+              }
+
+              Version::Http2 => {
+                let (conn_send, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+                  .handshake(io)
+                  .await
+                  .map_err(ConnectError::TcpHandshake)?;
+
+                let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
+                log::debug!("tls http2 connection {} established", uid);
+
+                tokio::spawn(async move {
+                  let _ = conn.await;
+                  log::debug!("tls http2 connection {} closed", uid);
+                  connection_end(weak, &key, uid);
+                });
+
+                let send = SendRequest::Http2(conn_send);
+                let sender = Sender { send, uid };
+
+                Ok(sender)
+              }
+
+              Version::Http3 => {
+                unreachable!()
+              }
+            }
           }
         }
       }
-
-      Protocol::Https => {
-
-        macro_rules! tls_config {
-          ($($alpn:tt)*) => {{
-            #[static_init::dynamic]
-            static TLS_CONFIG: Arc<ClientConfig> = {
-              let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
-                .with_safe_default_protocol_versions()
-                .expect("cannot build tls client config with default protocols")
-                .with_native_roots()
-                .expect("cannot build tls client config with native roots")
-                .with_no_client_auth();
-
-              config.enable_sni = true;
-              config.alpn_protocols = vec![$($alpn.to_vec())*];
-              
-              Arc::new(config)
-            };
-
-            TLS_CONFIG.clone()
-          }}
-        }
-
-
-        macro_rules! danger_no_cert_verifier_tls_config {
-          ($($alpn:tt)*) => {{
-            #[static_init::dynamic]
-            static DANGER_NO_CERT_VERIFIER_TLS_CONFIG: Arc<ClientConfig> = {
-              let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
-                .with_safe_default_protocol_versions()
-                .expect("cannot build tls client config with default protocols")
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
-                .with_no_client_auth();
-
-              config.enable_sni = true;
-              config.alpn_protocols = vec![$($alpn.to_vec())*];
-
-              Arc::new(config)
-            };
-
-            DANGER_NO_CERT_VERIFIER_TLS_CONFIG.clone()
-          }}
-        }
-
-
-        let tls_config = match (key.accept_invalid_certs, key.version) {
-          (true, Version::Http10) => danger_no_cert_verifier_tls_config!(b"http/1.0"),
-          (true, Version::Http11) => danger_no_cert_verifier_tls_config!(b"http/1.1"),
-          (true, Version::Http2) => danger_no_cert_verifier_tls_config!(b"h2"),
-          (false, Version::Http10) => tls_config!(b"http/1.0"),
-          (false, Version::Http11) => tls_config!(b"http/1.1"),
-          (false, Version::Http2) => tls_config!(b"h2"),
-        };
-
-        let tls_connector = tokio_rustls::TlsConnector::from(tls_config);
-        
-        let sni = match &key.sni {
-          Some(sni) => sni.0.clone(),
-          None => pki_types::ServerName::try_from(key.host.to_string())
-            .map_err( ConnectError::InvalidUriHost)?
-        };
-
-        let tls_stream = tls_connector.connect(sni, tcp)
-          .await
-          .map_err(ConnectError::TlsConnect)?;
-
-        let io = Box::pin(TimeoutIo::new(TokioIo::new(tls_stream), key.read_timeout, key.write_timeout));
-
-        match key.version {
-          Version::Http10 | Version::Http11 => {
-            let (conn_send, conn) = hyper::client::conn::http1::Builder::new()
-              .handshake(io)
-              .await
-              .map_err(ConnectError::TcpHandshake)?;
-
-            let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
-            log::debug!("ssl http2 connection {} established", uid);
-
-            tokio::spawn(async move {
-              let _ = conn.with_upgrades().await;
-              log::debug!("ssl http2 connection {} closed", uid);
-              connection_end(weak, &key, uid);
-            });
-
-            let send = SendRequest::Http1(conn_send);
-            let sender = Sender {
-              send,
-              uid,
-              // last_used: Instant::now(),
-            };
-
-            Ok(sender)
+    
+      Version::Http3 => {
+        match key.protocol {
+          Protocol::Http => {
+            Err(ConnectError::Http3SchemeNotHttps)
           }
 
-          Version::Http2 => {
-            let (conn_send, conn) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-              .handshake(io)
-              .await
-              .map_err(ConnectError::TcpHandshake)?;
+          Protocol::Https => {
+            
+            let tls_config = match key.accept_invalid_certs {
+              true => {
+                  #[static_init::dynamic]
+                  static TLS_CONFIG: rustls::ClientConfig = {
+                    let mut config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                      .with_protocol_versions(&[&rustls::version::TLS13])
+                      .expect("cannot build tls client config with default protocols")
+                      .with_native_roots()
+                      .expect("cannot build tls client config with native roots")
+                      .with_no_client_auth();
 
-            let uid = CONNECTION_UID.fetch_add(1, Ordering::AcqRel);
-            log::debug!("tls http2 connection {} established", uid);
+                    config.enable_early_data = true;
+                    config.alpn_protocols = vec![b"h3".to_vec()];
 
-            tokio::spawn(async move {
-              let _ = conn.await;
-              log::debug!("tls http2 connection {} closed", uid);
-              connection_end(weak, &key, uid);
-            });
+                    config
+                  };
 
-            let send = SendRequest::Http2(conn_send);
-            let sender = Sender { send, uid };
+                  TLS_CONFIG.clone()
+                }
+
+              false => {
+                #[static_init::dynamic]
+                static TLS_CONFIG: rustls::ClientConfig = {
+                  let mut config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                    .with_protocol_versions(&[&rustls::version::TLS13])
+                    .expect("cannot build tls client config with default protocols")
+                    .dangerous()
+                    .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
+                    .with_no_client_auth();
+
+                  config.enable_early_data = true;
+                  config.alpn_protocols = vec![b"h3".to_vec()];
+
+                  config
+                };
+
+                TLS_CONFIG.clone()
+              }
+            };
+
+            let local_addr = std::net::SocketAddr::from(([0u16, 0, 0, 0, 0, 0, 0, 0], 0u16));
+            let mut client_endpoint = h3_quinn::quinn::Endpoint::client(local_addr).map_err(ConnectError::Http3QuinnLocalBind)?;
+            let client_config = quinn::ClientConfig::new(Arc::new(
+              quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)?
+            ));
+            client_endpoint.set_default_client_config(client_config);
+
+            let uri: Uri = format!("https://{}:{}/", key.host, key.port).parse().unwrap();
+            let server_name = match &key.sni {
+              Some(sni) => sni.to_str().to_string(),
+              None => key.host.to_string(),
+            };
+            
+            use h3_util::client::H3Connection;
+            let connector = h3_util::quinn::H3QuinnConnector::new(uri.clone(), server_name, client_endpoint);
+            let conn: H3Connection<_, Body> = H3Connection::new(connector, uri);
+            
+            let sender = Sender {
+              uid: CONNECTION_UID.fetch_add(1, std::sync::atomic::Ordering::AcqRel),
+              send: SendRequest::Http3(Http3SendRequest { conn }),
+            };
 
             Ok(sender)
           }
@@ -854,6 +979,25 @@ impl Pool {
 
             Response::from_parts(parts, Body::incoming(incoming))
           }
+
+          #[cfg(feature = "h3-quinn")]
+          SendRequest::Http3(mut send) => {
+            use tower::Service;
+            let response = send
+              .conn
+              .call(request)
+              .await
+              .map_err(ClientError::SendRequestH3Quinn)?;
+
+            pool.insert(key, Sender {
+              uid,
+              send: SendRequest::Http3(send)
+            });
+
+            let (parts, incoming) = response.into_parts();
+
+            Response::from_parts(parts, Body::incoming_h3_quinn_client(incoming))
+          }
         };
 
         Ok(response)
@@ -964,7 +1108,11 @@ pub enum ClientError {
   },
 
   #[error("error after request sent: {0}")]
-  SendRequest(hyper::Error),
+  SendRequest(#[source] hyper::Error),
+
+  #[cfg(feature = "h3-quinn")]
+  #[error("error after h3 request sent: {0}")]
+  SendRequestH3Quinn(#[source] h3_util::Error),
 }
 
 /**
@@ -980,6 +1128,8 @@ pub enum ClientErrorKind {
   InvalidUriMissingHost,
   Connect,
   SendRequest,
+  #[cfg(feature = "h3-quinn")]
+  SendRequestH3Quinn,
 }
 
 impl ClientErrorKind {
@@ -993,6 +1143,8 @@ impl ClientErrorKind {
       E::InvalidUriMissingHost => ErrorOriginator::Config,
       E::Connect => ErrorOriginator::Upstream,
       E::SendRequest => ErrorOriginator::Upstream,
+      #[cfg(feature = "h3-quinn")]
+      E::SendRequestH3Quinn => ErrorOriginator::Upstream,
     }
   }
 
@@ -1006,6 +1158,8 @@ impl ClientErrorKind {
       E::InvalidUriMissingHost => StatusCode::BAD_REQUEST,
       E::Connect => StatusCode::BAD_GATEWAY,
       E::SendRequest => StatusCode::BAD_GATEWAY,
+      #[cfg(feature = "h3-quinn")]
+      E::SendRequestH3Quinn => StatusCode::BAD_GATEWAY,
     }
   }
 }
@@ -1023,6 +1177,8 @@ impl ClientError {
       ClientError::InvalidUriMissingHost => ClientErrorKind::InvalidUriMissingHost,
       ClientError::Connect { .. } => ClientErrorKind::Connect,
       ClientError::SendRequest(_) => ClientErrorKind::SendRequest,
+      #[cfg(feature = "h3-quinn")]
+      ClientError::SendRequestH3Quinn(_) => ClientErrorKind::SendRequestH3Quinn,
     }
   }
 
@@ -1066,6 +1222,21 @@ pub enum ConnectError {
   // HttpsTcpReady(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
   // #[error("https tcp connect error: {0}")]
   // HttpsTcpConnect(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
+  #[error("http3 connect error: {0}")]
+  Ready(#[from] ReadyError),
+
+  #[cfg(feature = "h3-quinn")]
+  #[error("http3 scheme is not https")]
+  Http3SchemeNotHttps,
+  #[error("http3 connect quinn error: local bind error: {0}")]
+  Http3QuinnLocalBind(#[source] std::io::Error),
+  #[error("http3 connect quinn error: {0}")]
+  Http3QuinnConnect(#[source] h3_util::Error),
+  #[error("http3 connect quinn error: connection ready error: {0}")]
+  Http3QuinnConnectionReady(#[source] h3_util::Error),
+  #[error("http3 connect quinn error: client config error: {0}")]
+  Http3QuinnClientConfig(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
+
   #[error("tcp connect error: {0}")]
   TcpConnect(#[source] std::io::Error),
   #[error("tcp handshake error: {0}")]
