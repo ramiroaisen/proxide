@@ -24,6 +24,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tokio_util::time::FutureExt;
 
+#[cfg(feature = "h3-quinn")]
+use crate::config::Config;
 use crate::{
   graceful::GracefulGuard,
   net::timeout::TimeoutIo,
@@ -38,6 +40,8 @@ enum ConnectionKind {
   Https,
   Ssl,
   Tcp,
+  #[cfg(feature = "h3-quinn")]
+  H3Quinn,
 }
 
 impl Display for ConnectionKind {
@@ -47,6 +51,8 @@ impl Display for ConnectionKind {
       ConnectionKind::Https => write!(f, "https"),
       ConnectionKind::Ssl => write!(f, "ssl"),
       ConnectionKind::Tcp => write!(f, "tcp"),
+      #[cfg(feature = "h3-quinn")]
+      ConnectionKind::H3Quinn => write!(f, "h3"),
     }
   }
 }
@@ -83,6 +89,37 @@ impl Drop for ConnectionItemGuard {
   }
 }
 
+#[cfg(feature = "h3-quinn")]
+#[derive(Debug, thiserror::Error)]
+pub enum H3QuinnBindError {
+  #[error("h3 quinn bind io error: {0}")]
+  Io(#[source] std::io::Error),
+
+  #[error("h3 quinn bind error: {0}")]
+  NoInitialCipherSuite(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
+
+  #[error("h3 quinn bind error: socket create error: {0}")]
+  SocketCreate(#[source] std::io::Error),
+
+  #[error("h3 quinn bind error: socket bind error: {0}")]
+  SocketBind(#[source] std::io::Error),
+
+  #[error("h3 quinn bind error: set socket ipv6 only error: {0}")]
+  SocketSetIpv6Only(#[source] std::io::Error),
+
+  #[error("h3 quinn bind error: socket from std error: {0}")]
+  SocketFromStd(#[source] std::io::Error),
+
+  #[error("h3 quinn bind error: no default async runtime")]
+  NoDefaultRuntime,
+
+  #[error("h3 quinn bind error: socket runtime wrap error: {0}")]
+  SocketRuntimeWrap(#[source] std::io::Error),
+
+  #[error("h3 quinn bind error: endpoint create error: {0}")]
+  EndpointCreate(#[source] std::io::Error),
+}
+
 #[must_use = "connection start returns a drop guard"]
 pub fn connection_start(connection: ConnectionItem) -> ConnectionItemGuard {
   CONNECTIONS.lock().insert(connection);
@@ -101,19 +138,24 @@ pub fn log_ip_connections() {
   let mut total_http = 0;
   let mut total_ssl = 0;
   let mut total_tcp = 0;
+  #[cfg(feature = "h3-quinn")]
+  let mut total_h3 = 0;
   for connection in connections.iter() {
     match connection.kind {
       ConnectionKind::Http => total_http += 1,
       ConnectionKind::Https => total_https += 1,
       ConnectionKind::Ssl => total_ssl += 1,
       ConnectionKind::Tcp => total_tcp += 1,
+      #[cfg(feature = "h3-quinn")]
+      ConnectionKind::H3Quinn => total_h3 += 1,
     }
   }
 
   log::info!(
-    "= server connections - https: {} -  http: {} - ssl: {} - tcp: {} | total: {} =",
+    "= server connections - https: {} -  http: {} - h3: {} - ssl: {} - tcp: {} | total: {} =",
     total_https,
     total_http,
+    total_h3,
     total_ssl,
     total_tcp,
     total_https + total_http + total_ssl + total_tcp
@@ -434,6 +476,206 @@ pub async fn serve_https<M, S, B, Sig>(
   };
 
   tokio::join!(connection_task, accept_task);
+}
+
+#[cfg(feature = "h3-quinn")]
+#[allow(clippy::too_many_arguments)]
+pub fn serve_h3_quinn<Sig>(
+  local_addr: SocketAddr,
+  config: Arc<Config>,
+  tls_config: Arc<ServerConfig>,
+  signal: Sig,
+  // read_timeout: Duration,
+  // write_timeout: Duration,
+  graceful_shutdown_timeout: Option<Duration>,
+) -> Result<impl Future<Output = ()>, H3QuinnBindError>
+where
+  Sig: Future<Output = ()>,
+{
+  use quinn::{crypto::rustls::QuicServerConfig, default_runtime};
+  use socket2::Protocol;
+
+  let mut tls_config = (*tls_config).clone();
+  tls_config.max_early_data_size = u32::MAX;
+  tls_config.alpn_protocols = vec![b"h3".to_vec()];
+
+  let endpoint_config = quinn::EndpointConfig::default();
+
+  let server_config =
+    quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls_config)?));
+
+  let socket = socket2::Socket::new(
+    socket2::Domain::for_address(local_addr),
+    socket2::Type::DGRAM,
+    Some(Protocol::UDP),
+  )
+  .map_err(H3QuinnBindError::SocketCreate)?;
+
+  if local_addr.is_ipv6() {
+    socket
+      .set_only_v6(true)
+      .map_err(H3QuinnBindError::SocketSetIpv6Only)?;
+  }
+
+  socket
+    .bind(&local_addr.into())
+    .map_err(H3QuinnBindError::SocketBind)?;
+
+  let runtime = match default_runtime() {
+    Some(runtime) => runtime,
+    None => return Err(H3QuinnBindError::NoDefaultRuntime),
+  };
+
+  let socket = runtime
+    .wrap_udp_socket(socket.into())
+    .map_err(H3QuinnBindError::SocketRuntimeWrap)?;
+
+  let endpoint = quinn::Endpoint::new_with_abstract_socket(
+    endpoint_config,
+    Some(server_config),
+    socket,
+    runtime,
+  )
+  .map_err(H3QuinnBindError::EndpointCreate)?;
+
+  let graceful_task = async move {
+    let accept_task = async {
+      while let Some(new_conn) = endpoint.accept().await {
+        let config = config.clone();
+        tokio::spawn(async move {
+          use bytes::BytesMut;
+          let remote_addr = new_conn.remote_address();
+
+          let connection_item = ConnectionItem::new(remote_addr.ip(), ConnectionKind::H3Quinn);
+          let connection_guard = connection_start(connection_item);
+
+          let conn = match new_conn.await {
+            Err(e) => {
+              log::warn!("error at h3 new_conn.await - {e}: {e:?}");
+              return;
+            }
+
+            Ok(conn) => conn,
+          };
+
+          let mut h3_conn: h3::server::Connection<_, BytesMut> =
+            h3::server::Connection::new(h3_quinn::Connection::new(conn))
+              .await
+              .unwrap();
+
+          loop {
+            let resolver = match h3_conn.accept().await {
+              Ok(resolver) => match resolver {
+                Some(resolver) => resolver,
+                None => {
+                  log::debug!("h3 server connection ended");
+                  break;
+                }
+              },
+
+              Err(e) => {
+                log::warn!("error at h3 accepted.await - {e}: {e:?}");
+                break;
+              }
+            };
+
+            let config = config.clone();
+            tokio::spawn(async move {
+              use futures::StreamExt;
+
+              use crate::{body::map_request_body, proxy::service::serve_proxy};
+
+              let (req, stream) = match resolver.resolve_request().await {
+                Ok(pair) => pair,
+                Err(e) => {
+                  log::warn!("error resolving h3 request - {e}: {e:?}");
+                  return;
+                }
+              };
+
+              let (mut send_stream, recv_stream) = stream.split();
+              let h3_body = h3_util::server_body::H3IncomingServer::new(recv_stream);
+              let body = crate::body::Body::incoming_h3_quinn_server(h3_body);
+
+              let req = map_request_body(req, |_| body);
+
+              let res = match serve_proxy(req, &config, local_addr, remote_addr, None, true).await {
+                Ok(response) => response,
+                Err(e) => {
+                  log::warn!("error handling h3 request - {e}: {e:?}");
+                  todo!();
+                }
+              };
+
+              let (res, mut body) = res.into_parts();
+              let res = Response::from_parts(res, ());
+              if let Err(e) = send_stream.send_response(res).await {
+                log::warn!("error sending h3 response - {e}: {e:?}");
+                return;
+              }
+
+              while let Some(next) = body.next().await {
+                let frame = match next {
+                  Ok(frame) => frame,
+                  Err(e) => {
+                    log::warn!("h3 error at body.next() - {e}: {e:?}");
+                    return;
+                  }
+                };
+
+                if frame.is_data() {
+                  let data = frame.into_data().ok().unwrap();
+                  if let Err(e) = send_stream.send_data(BytesMut::from(data)).await {
+                    log::warn!("h3 error at send_stream.send_data() - {e}: {e:?}");
+                    return;
+                  };
+                } else if frame.is_trailers() {
+                  let trailers = frame.into_trailers().ok().unwrap();
+                  if let Err(e) = send_stream.send_trailers(trailers).await {
+                    log::warn!("h3 error at send_stream.send_trailers() - {e}: {e:?}");
+                    return;
+                  };
+                }
+              }
+
+              // Close the stream gracefully.
+              // This is technically only needed when not writing trailers.
+              // But msquic-h3 requires stream be gracefully closed all the time.
+              if let Err(e) = send_stream.finish().await {
+                log::warn!("h3 error at send_stream.finish() - {e}: {e:?}");
+              };
+            });
+          }
+
+          drop(connection_guard)
+        });
+      }
+    };
+
+    tokio::select! {
+      _ = accept_task => {
+      }
+
+      _ = signal => {
+        match graceful_shutdown_timeout {
+          None => {
+            endpoint.wait_idle().await;
+          }
+
+          Some(timeout) => {
+            if endpoint.wait_idle().timeout(timeout).await.is_err() {
+              log::info!(
+                "graceful shutdown timeout ({}s) reached for h3 server",
+                timeout.as_secs()
+              );
+            };
+          }
+        }
+      }
+    }
+  };
+
+  Ok(graceful_task)
 }
 
 pub async fn serve_tcp<S, Sig>(

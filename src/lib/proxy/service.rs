@@ -148,7 +148,7 @@ fn compress(
 }
 
 pub async fn serve_proxy(
-  request: Request<Incoming>,
+  request: Request<Body>,
   config: &Config,
   local_addr: SocketAddr,
   remote_addr: SocketAddr,
@@ -598,7 +598,7 @@ pub async fn serve_proxy(
     add_headers!(proxy_headers, handle_proxy_headers);
     // the $config.http.app.upstream proxy headers will be added on demand for the selected upstream
 
-    let mut root_request = Some(map_request_body(request, Body::incoming));
+    let mut root_request = Some(request);
     let mut last_error: Option<ProxyHttpError> = None;
 
     let retries = crate::option!(
@@ -1519,6 +1519,7 @@ impl Service<Request<Incoming>> for HttpService {
     // we spawn here to avoid cancellation
     // this has almost no impact on performance and help to the predictability of the service as it avoids it being cancelled in-flight
     let handle = tokio::spawn(async move {
+      let req = map_request_body(req, Body::incoming);
       match serve_proxy(req, &config, local_addr, remote_addr, proxy_header, ssl).await {
         Ok(response) => Ok(response),
         Err(e) => {

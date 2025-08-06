@@ -31,7 +31,7 @@ use crate::{
     service::ProxyStreamService,
   },
   proxy_protocol::ExpectProxyProtocol,
-  serve::{serve_http, serve_https, serve_ssl, serve_tcp},
+  serve::{serve_h3_quinn, serve_http, serve_https, serve_ssl, serve_tcp},
   tls::{cert_resolver::CertResolver, crypto, load_certs, load_private_key},
 };
 
@@ -383,6 +383,11 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
   });
 
   /*
+   * this struct contains the mapping between an h3 ssl listen port and the SNI hostnames with their respective [`CertfiedKeys`]
+   */
+  let mut h3_bind = IndexMap::<SocketAddr, IndexMap<ServerName, Arc<CertifiedKey>>>::new();
+
+  /*
    * this struct contains the mapping between an ssl listen port and the SNI hostnames with their respective [`CertfiedKeys`]
    */
   let mut https_bind = IndexMap::<
@@ -445,59 +450,96 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           }
 
           Some(ssl) => {
-            if http_bind.contains_key(&addr) {
-              anyhow::bail!(
-                "https and http cannot bind to same port at {} in config file",
-                addr,
-              );
-            }
+            if ssl.h3 == Some(true) {
+              let iter = match app.server_names.as_ref() {
+                Some(list) => list.as_slice(),
+                None => &[ServerName::All],
+              };
 
-            match https_bind.get(&addr) {
-              None => {}
-              Some((expect_proxy_protocol, _)) => {
-                if *expect_proxy_protocol != listen.expect_proxy_protocol {
-                  anyhow::bail!(
-                    "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
-                    addr,
-                  );
+              for server_name in iter {
+                let h3_hosts = h3_bind.entry(addr).or_default();
+
+                match h3_hosts.entry(server_name.clone()) {
+                  Entry::Occupied(_) => {
+                    anyhow::bail!(
+                      "duplicate ssl+h3 listen address + server name in config file at address: {} server name: {}",
+                      addr,
+                      server_name
+                    );
+                  }
+
+                  Entry::Vacant(entry) => {
+                    let certs_der = load_certs(&ssl.cert)
+                      .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
+
+                    let key_der = load_private_key(&ssl.key)
+                      .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+
+                    let signing_key = crypto::sign::any_supported_type(&key_der)
+                      .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
+
+                    let certified_key =
+                      Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
+
+                    entry.insert(certified_key);
+                  }
                 }
               }
-            }
+            } else {
+              if http_bind.contains_key(&addr) {
+                anyhow::bail!(
+                  "https and http cannot bind to same port at {} in config file",
+                  addr,
+                );
+              }
 
-            let iter = match app.server_names.as_ref() {
-              Some(list) => list.as_slice(),
-              None => &[ServerName::All],
-            };
-
-            for server_name in iter {
-              let https_hosts = &mut https_bind
-                .entry(addr)
-                .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))
-                .1;
-
-              match https_hosts.entry(server_name.clone()) {
-                Entry::Occupied(_) => {
-                  anyhow::bail!(
-                    "duplicate listen address + server name in config file at address: {} server name: {}",
-                    addr,
-                    server_name
-                  );
+              match https_bind.get(&addr) {
+                None => {}
+                Some((expect_proxy_protocol, _)) => {
+                  if *expect_proxy_protocol != listen.expect_proxy_protocol {
+                    anyhow::bail!(
+                      "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
+                      addr,
+                    );
+                  }
                 }
+              }
 
-                Entry::Vacant(entry) => {
-                  let certs_der = load_certs(&ssl.cert)
-                    .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
+              let iter = match app.server_names.as_ref() {
+                Some(list) => list.as_slice(),
+                None => &[ServerName::All],
+              };
 
-                  let key_der = load_private_key(&ssl.key)
-                    .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+              for server_name in iter {
+                let https_hosts = &mut https_bind
+                  .entry(addr)
+                  .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))
+                  .1;
 
-                  let signing_key = crypto::sign::any_supported_type(&key_der)
-                    .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
+                match https_hosts.entry(server_name.clone()) {
+                  Entry::Occupied(_) => {
+                    anyhow::bail!(
+                      "duplicate listen address + server name in config file at address: {} server name: {}",
+                      addr,
+                      server_name
+                    );
+                  }
 
-                  let certified_key =
-                    Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
+                  Entry::Vacant(entry) => {
+                    let certs_der = load_certs(&ssl.cert)
+                      .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
 
-                  entry.insert(certified_key);
+                    let key_der = load_private_key(&ssl.key)
+                      .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+
+                    let signing_key = crypto::sign::any_supported_type(&key_der)
+                      .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
+
+                    let certified_key =
+                      Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
+
+                    entry.insert(certified_key);
+                  }
                 }
               }
             }
@@ -690,6 +732,56 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           )
           .await;
           log::info!("https server at {} stopped", local_addr);
+        }
+      }
+    });
+
+    handles.push(handle);
+  }
+
+  for (local_addr, sni) in h3_bind {
+    log::info!("binding in h3 mode at {local_addr}");
+
+    let mut cert_resolver = CertResolver::new();
+    if let Some((_, key)) = sni.first() {
+      cert_resolver.set_default(key.clone());
+    }
+
+    for (server_name, key) in sni {
+      cert_resolver.add(server_name, key);
+    }
+
+    let crypto_provider = Arc::new(crypto::default_provider());
+
+    let mut server_config = rustls::ServerConfig::builder_with_provider(crypto_provider)
+      .with_protocol_versions(&[&TLS13])
+      .with_context(|| format!("error building server config for addr {local_addr}"))?
+      .with_no_client_auth()
+      .with_cert_resolver(Arc::new(cert_resolver));
+
+    server_config.alpn_protocols = vec![b"h3".to_vec()];
+
+    let server_config = Arc::new(server_config);
+
+    let signal = cancel_token.clone().cancelled_owned();
+    let task = serve_h3_quinn(
+      local_addr,
+      config.clone(),
+      server_config,
+      signal,
+      // read_timeout,
+      // write_timeout,
+      http_graceful_shutdown_timeout,
+    )
+    .with_context(|| format!("error binding in h3 mode at addr {local_addr}"))?;
+
+    let handle = tokio::spawn({
+      let mut wait_start = start.subscribe();
+      async move {
+        if let Ok(()) = wait_start.changed().await {
+          log::info!("starting h3 server at {}", local_addr);
+          task.await;
+          log::info!("h3 server at {} stopped", local_addr);
         }
       }
     });

@@ -1,6 +1,6 @@
 use crate::channel::spsc;
-use bytes::Bytes;
 #[cfg(feature = "h3-quinn")]
+use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use http_body::Frame;
 use http_body::SizeHint;
@@ -25,7 +25,9 @@ pub enum BodyKind {
   #[cfg(feature = "h3-quinn")]
   IncomingH3QuinnClient(#[pin] h3_util::client_body::H3IncomingClient<h3_quinn::RecvStream, Bytes>),
   #[cfg(feature = "h3-quinn")]
-  IncomingH3QuinnServer(#[pin] h3_util::server_body::H3IncomingServer<h3_quinn::RecvStream, Bytes>),
+  IncomingH3QuinnServer(
+    #[pin] h3_util::server_body::H3IncomingServer<h3_quinn::RecvStream, BytesMut>,
+  ),
   Stream(FrameStream),
 }
 
@@ -121,7 +123,7 @@ impl Body {
 
   #[cfg(feature = "h3-quinn")]
   pub fn incoming_h3_quinn_server(
-    incoming: h3_util::server_body::H3IncomingServer<h3_quinn::RecvStream, Bytes>,
+    incoming: h3_util::server_body::H3IncomingServer<h3_quinn::RecvStream, BytesMut>,
   ) -> Self {
     Self {
       kind: BodyKind::IncomingH3QuinnServer(incoming),
@@ -156,7 +158,7 @@ impl BodyKind {
 
   #[cfg(feature = "h3-quinn")]
   pub fn incoming_h3_quinn_server(
-    incoming: h3_util::server_body::H3IncomingServer<h3_quinn::RecvStream, Bytes>,
+    incoming: h3_util::server_body::H3IncomingServer<h3_quinn::RecvStream, BytesMut>,
   ) -> Self {
     Self::IncomingH3QuinnServer(incoming)
   }

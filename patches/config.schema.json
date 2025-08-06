@@ -1,0 +1,1812 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Config",
+  "type": "object",
+  "properties": {
+    "pidfile": {
+      "type": "string"
+    },
+    "log_level": {
+      "$ref": "#/definitions/LevelFilter"
+    },
+    "primary_log": {
+      "$ref": "#/definitions/LogFileConfig"
+    },
+    "access_log": {
+      "$ref": "#/definitions/LogFileConfig"
+    },
+    "client_log": {
+      "$ref": "#/definitions/LogFileConfig"
+    },
+    "graceful_shutdown_timeout": {
+      "$ref": "#/definitions/String"
+    },
+    "proxy_protocol_read_timeout": {
+      "$ref": "#/definitions/String"
+    },
+    "proxy_protocol_write_timeout": {
+      "$ref": "#/definitions/String"
+    },
+    "proxy_tcp_nodelay": {
+      "type": "boolean"
+    },
+    "rlimit": {
+      "$ref": "#/definitions/RLimit"
+    },
+    "http": {
+      "$ref": "#/definitions/Http"
+    },
+    "stream": {
+      "$ref": "#/definitions/Stream"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "LevelFilter": {
+      "type": "string",
+      "enum": [
+        "off",
+        "error",
+        "warn",
+        "info",
+        "debug",
+        "trace"
+      ]
+    },
+    "LogFileConfig": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "max_size_mb": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "retain": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        }
+      }
+    },
+    "String": {
+      "type": "string"
+    },
+    "RLimit": {
+      "type": "object",
+      "properties": {
+        "nofile": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "nproc": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "rthreads": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "nthr": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "stack": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "rss": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "memlock": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "swap": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "cpu": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "as": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "core": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "data": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "fsize": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Http": {
+      "type": "object",
+      "properties": {
+        "compression": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Compress"
+          }
+        },
+        "compression_content_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/String"
+          }
+        },
+        "compression_min_size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "server_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "server_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_tcp_nodelay": {
+          "type": "boolean"
+        },
+        "graceful_shutdown_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "response_headers": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "$ref": "#/definitions/String"
+              },
+              {
+                "$ref": "#/definitions/String"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "proxy_headers": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "$ref": "#/definitions/String"
+              },
+              {
+                "$ref": "#/definitions/String"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "retries": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "retry_backoff": {
+          "$ref": "#/definitions/BackOff"
+        },
+        "proxy_protocol_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_protocol_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "balance": {
+          "$ref": "#/definitions/Balance"
+        },
+        "healthcheck": {
+          "$ref": "#/definitions/HttpHealthcheck"
+        },
+        "apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/HttpApp"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Compress": {
+      "type": "object",
+      "required": [
+        "algo",
+        "level"
+      ],
+      "properties": {
+        "algo": {
+          "$ref": "#/definitions/Encoding"
+        },
+        "level": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Encoding": {
+      "type": "string",
+      "enum": [
+        "br",
+        "zstd",
+        "gzip",
+        "deflate"
+      ]
+    },
+    "BackOff": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "exponential"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "delay_base",
+                "delay_max",
+                "exponent_base"
+              ],
+              "properties": {
+                "exponent_base": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "delay_base": {
+                  "$ref": "#/definitions/String"
+                },
+                "delay_max": {
+                  "$ref": "#/definitions/String"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "constant"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "delay"
+              ],
+              "properties": {
+                "delay": {
+                  "$ref": "#/definitions/String"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Balance": {
+      "type": "string",
+      "enum": [
+        "round-robin",
+        "random",
+        "ip-hash",
+        "least-connections"
+      ]
+    },
+    "HttpHealthcheck": {
+      "type": "object",
+      "required": [
+        "interval"
+      ],
+      "properties": {
+        "interval": {
+          "$ref": "#/definitions/String"
+        }
+      }
+    },
+    "HttpApp": {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "listen"
+          ],
+          "properties": {
+            "listen": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Listen"
+              }
+            },
+            "server_names": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ServerName"
+              }
+            },
+            "compression": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Compress"
+              }
+            },
+            "compression_content_types": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/String"
+              }
+            },
+            "compression_min_size": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "balance": {
+              "$ref": "#/definitions/Balance"
+            },
+            "retries": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0.0
+            },
+            "retry_backoff": {
+              "$ref": "#/definitions/BackOff"
+            },
+            "proxy_read_timeout": {
+              "$ref": "#/definitions/String"
+            },
+            "proxy_write_timeout": {
+              "$ref": "#/definitions/String"
+            },
+            "proxy_tcp_nodelay": {
+              "type": "boolean"
+            },
+            "response_headers": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": [
+                  {
+                    "$ref": "#/definitions/String"
+                  },
+                  {
+                    "$ref": "#/definitions/String"
+                  }
+                ],
+                "maxItems": 2,
+                "minItems": 2
+              }
+            },
+            "healthcheck": {
+              "$ref": "#/definitions/HttpHealthcheck"
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "return"
+              ],
+              "properties": {
+                "return": {
+                  "type": "object",
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "$ref": "#/definitions/uint16"
+                    },
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "body": {
+                      "$ref": "#/definitions/String"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "heap_profile"
+              ],
+              "properties": {
+                "heap_profile": {
+                  "type": "object",
+                  "properties": {
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "stats"
+              ],
+              "properties": {
+                "stats": {
+                  "type": "object",
+                  "properties": {
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "static"
+              ],
+              "properties": {
+                "static": {
+                  "type": "object",
+                  "required": [
+                    "base_dir"
+                  ],
+                  "properties": {
+                    "base_dir": {
+                      "type": "string"
+                    },
+                    "index_files": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "dot_files": {
+                      "$ref": "#/definitions/DotFiles"
+                    },
+                    "follow_symlinks": {
+                      "type": "boolean"
+                    },
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "compression": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/Compress"
+                      }
+                    },
+                    "compression_content_types": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/String"
+                      }
+                    },
+                    "compression_min_size": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0.0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "proxy"
+              ],
+              "properties": {
+                "proxy": {
+                  "type": "object",
+                  "required": [
+                    "upstream"
+                  ],
+                  "properties": {
+                    "balance": {
+                      "$ref": "#/definitions/Balance"
+                    },
+                    "retries": {
+                      "type": "integer",
+                      "format": "uint",
+                      "minimum": 0.0
+                    },
+                    "retry_backoff": {
+                      "$ref": "#/definitions/BackOff"
+                    },
+                    "proxy_read_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_write_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_tcp_nodelay": {
+                      "type": "boolean"
+                    },
+                    "proxy_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "proxy_protocol_write_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "healthcheck": {
+                      "$ref": "#/definitions/HttpHealthcheck"
+                    },
+                    "state_round_robin_index": {
+                      "default": 0,
+                      "readOnly": true,
+                      "type": "integer",
+                      "format": "uint",
+                      "minimum": 0.0
+                    },
+                    "upstream": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/HttpUpstream"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "when"
+              ],
+              "properties": {
+                "when": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/HttpMatcher"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "Listen": {
+      "type": "object",
+      "required": [
+        "addr"
+      ],
+      "properties": {
+        "addr": {
+          "$ref": "#/definitions/PortOrAddr"
+        },
+        "ssl": {
+          "$ref": "#/definitions/Ssl"
+        },
+        "expect_proxy_protocol": {
+          "$ref": "#/definitions/ExpectProxyProtocol"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PortOrAddr": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Ssl": {
+      "type": "object",
+      "required": [
+        "cert",
+        "key"
+      ],
+      "properties": {
+        "cert": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "h3": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExpectProxyProtocol": {
+      "type": "string",
+      "enum": [
+        "v1",
+        "v2",
+        "any-version"
+      ]
+    },
+    "ServerName": {
+      "anyOf": [
+        {
+          "type": "object",
+          "required": [
+            "regex"
+          ],
+          "properties": {
+            "regex": {
+              "$ref": "#/definitions/Regex"
+            }
+          }
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "Regex": {
+      "type": "string"
+    },
+    "uint16": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 0.0
+    },
+    "DotFiles": {
+      "type": "string",
+      "enum": [
+        "ignore",
+        "allow",
+        "error"
+      ]
+    },
+    "HttpUpstream": {
+      "type": "object",
+      "required": [
+        "base_url"
+      ],
+      "properties": {
+        "base_url": {
+          "$ref": "#/definitions/Url"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1.0
+        },
+        "sni": {
+          "$ref": "#/definitions/String"
+        },
+        "send_proxy_protocol": {
+          "$ref": "#/definitions/ProxyProtocolVersion"
+        },
+        "version": {
+          "default": "http/1.1",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UpstreamVersion"
+            }
+          ]
+        },
+        "proxy_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_tcp_nodelay": {
+          "type": "boolean"
+        },
+        "proxy_headers": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "$ref": "#/definitions/String"
+              },
+              {
+                "$ref": "#/definitions/String"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "response_headers": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "$ref": "#/definitions/String"
+              },
+              {
+                "$ref": "#/definitions/String"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2
+          }
+        },
+        "compression": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Compress"
+          }
+        },
+        "compression_content_types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/String"
+          }
+        },
+        "compression_min_size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "proxy_protocol_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "danger_accept_invalid_certs": {
+          "default": false,
+          "type": "boolean"
+        },
+        "healthcheck": {
+          "$ref": "#/definitions/HttpHealthcheck"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "ProxyProtocolVersion": {
+      "type": "string",
+      "enum": [
+        "v1",
+        "v2"
+      ]
+    },
+    "UpstreamVersion": {
+      "type": "string",
+      "enum": [
+        "http/1.0",
+        "http/1.1",
+        "http/2",
+        "http/3"
+      ]
+    },
+    "HttpMatcher": {
+      "allOf": [
+        {
+          "type": "object",
+          "required": [
+            "match"
+          ],
+          "properties": {
+            "match": {
+              "$ref": "#/definitions/RequestMatcher"
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "return"
+              ],
+              "properties": {
+                "return": {
+                  "type": "object",
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "$ref": "#/definitions/uint16"
+                    },
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "body": {
+                      "$ref": "#/definitions/String"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "heap_profile"
+              ],
+              "properties": {
+                "heap_profile": {
+                  "type": "object",
+                  "properties": {
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "stats"
+              ],
+              "properties": {
+                "stats": {
+                  "type": "object",
+                  "properties": {
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "static"
+              ],
+              "properties": {
+                "static": {
+                  "type": "object",
+                  "required": [
+                    "base_dir"
+                  ],
+                  "properties": {
+                    "base_dir": {
+                      "type": "string"
+                    },
+                    "index_files": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "dot_files": {
+                      "$ref": "#/definitions/DotFiles"
+                    },
+                    "follow_symlinks": {
+                      "type": "boolean"
+                    },
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "compression": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/Compress"
+                      }
+                    },
+                    "compression_content_types": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/String"
+                      }
+                    },
+                    "compression_min_size": {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0.0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "proxy"
+              ],
+              "properties": {
+                "proxy": {
+                  "type": "object",
+                  "required": [
+                    "upstream"
+                  ],
+                  "properties": {
+                    "balance": {
+                      "$ref": "#/definitions/Balance"
+                    },
+                    "retries": {
+                      "type": "integer",
+                      "format": "uint",
+                      "minimum": 0.0
+                    },
+                    "retry_backoff": {
+                      "$ref": "#/definitions/BackOff"
+                    },
+                    "proxy_read_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_write_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_tcp_nodelay": {
+                      "type": "boolean"
+                    },
+                    "proxy_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "response_headers": {
+                      "type": "array",
+                      "items": {
+                        "type": "array",
+                        "items": [
+                          {
+                            "$ref": "#/definitions/String"
+                          },
+                          {
+                            "$ref": "#/definitions/String"
+                          }
+                        ],
+                        "maxItems": 2,
+                        "minItems": 2
+                      }
+                    },
+                    "proxy_protocol_write_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "healthcheck": {
+                      "$ref": "#/definitions/HttpHealthcheck"
+                    },
+                    "state_round_robin_index": {
+                      "default": 0,
+                      "readOnly": true,
+                      "type": "integer",
+                      "format": "uint",
+                      "minimum": 0.0
+                    },
+                    "upstream": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/HttpUpstream"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "when"
+              ],
+              "properties": {
+                "when": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/HttpMatcher"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "RequestMatcher": {
+      "description": "Match requests by many parameters. \\ To use in `$config.http.apps[n].when[n].match`.",
+      "oneOf": [
+        {
+          "description": "matches all requests",
+          "type": "string",
+          "enum": [
+            "all"
+          ]
+        },
+        {
+          "description": "matches requests by path, see [`PathMatcher`]",
+          "type": "object",
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/definitions/PathMatcher"
+            }
+          }
+        },
+        {
+          "description": "matches requests by header, see [`HeaderMatcher`]",
+          "type": "object",
+          "required": [
+            "header"
+          ],
+          "properties": {
+            "header": {
+              "$ref": "#/definitions/HeaderMatcher"
+            }
+          }
+        },
+        {
+          "description": "matches requests by method, see [`MethodMatcher`]",
+          "type": "object",
+          "required": [
+            "method"
+          ],
+          "properties": {
+            "method": {
+              "$ref": "#/definitions/MethodMatcher"
+            }
+          }
+        },
+        {
+          "description": "matches requests by client ip, see [`IpMatcher`]",
+          "type": "object",
+          "required": [
+            "ip"
+          ],
+          "properties": {
+            "ip": {
+              "$ref": "#/definitions/IpMatcher"
+            }
+          }
+        },
+        {
+          "description": "matches requests by basic auth, see [`BasicAuthMatcher`]",
+          "type": "object",
+          "required": [
+            "basic_auth"
+          ],
+          "properties": {
+            "basic_auth": {
+              "$ref": "#/definitions/BasicAuthMatcher"
+            }
+          }
+        },
+        {
+          "description": "matches requests that do not match the specified matcher",
+          "type": "object",
+          "required": [
+            "not"
+          ],
+          "properties": {
+            "not": {
+              "$ref": "#/definitions/RequestMatcher"
+            }
+          }
+        },
+        {
+          "description": "matches requests that match any of the specified matchers",
+          "type": "object",
+          "required": [
+            "or"
+          ],
+          "properties": {
+            "or": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RequestMatcher"
+              }
+            }
+          }
+        },
+        {
+          "description": "matches requests that match all of the specified matchers",
+          "type": "object",
+          "required": [
+            "and"
+          ],
+          "properties": {
+            "and": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/RequestMatcher"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "PathMatcher": {
+      "description": "Match requests by path",
+      "oneOf": [
+        {
+          "description": "matches all paths",
+          "type": "string",
+          "enum": [
+            "all"
+          ]
+        },
+        {
+          "description": "matches exactly the path specified",
+          "type": "object",
+          "required": [
+            "exact"
+          ],
+          "properties": {
+            "exact": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "matches paths that start with the specified prefix optionally followed by a slash",
+          "type": "object",
+          "required": [
+            "scope"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "matches paths that match the specified regex",
+          "type": "object",
+          "required": [
+            "regex"
+          ],
+          "properties": {
+            "regex": {
+              "$ref": "#/definitions/Regex"
+            }
+          }
+        }
+      ]
+    },
+    "HeaderMatcher": {
+      "description": "Match requests by header",
+      "oneOf": [
+        {
+          "description": "matches if the header is present in the request",
+          "type": "object",
+          "required": [
+            "exists"
+          ],
+          "properties": {
+            "exists": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "matches if the header with specified name is equal to the specified value",
+          "type": "object",
+          "required": [
+            "exact"
+          ],
+          "properties": {
+            "exact": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          }
+        },
+        {
+          "description": "matches if the header with specified name is a list of comma separated values that contains the specified value",
+          "type": "object",
+          "required": [
+            "list_contains"
+          ],
+          "properties": {
+            "list_contains": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          }
+        },
+        {
+          "description": "matches if the header with specified name matches the specified regex",
+          "type": "object",
+          "required": [
+            "regex"
+          ],
+          "properties": {
+            "regex": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/Regex"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          }
+        }
+      ]
+    },
+    "MethodMatcher": {
+      "oneOf": [
+        {
+          "description": "matches if the method is equal to the specified method",
+          "type": "object",
+          "required": [
+            "eq"
+          ],
+          "properties": {
+            "eq": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "matches if the method is not equal to the specified method",
+          "type": "object",
+          "required": [
+            "ne"
+          ],
+          "properties": {
+            "ne": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "matches is the method is one of the specified methods",
+          "type": "object",
+          "required": [
+            "in"
+          ],
+          "properties": {
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "matches if the method is not one of the specified methods",
+          "type": "object",
+          "required": [
+            "not_in"
+          ],
+          "properties": {
+            "not_in": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "IpMatcher": {
+      "oneOf": [
+        {
+          "description": "matches if the ip is equal to the specified ip",
+          "type": "object",
+          "required": [
+            "eq"
+          ],
+          "properties": {
+            "eq": {
+              "type": "string",
+              "format": "ip"
+            }
+          }
+        },
+        {
+          "description": "matches if the ip is not equal to the specified ip",
+          "type": "object",
+          "required": [
+            "ne"
+          ],
+          "properties": {
+            "ne": {
+              "type": "string",
+              "format": "ip"
+            }
+          }
+        },
+        {
+          "description": "matches the specified ip",
+          "type": "object",
+          "required": [
+            "in"
+          ],
+          "properties": {
+            "in": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "ip"
+              }
+            }
+          }
+        },
+        {
+          "description": "matches if the ip is not in the specified list",
+          "type": "object",
+          "required": [
+            "not_in"
+          ],
+          "properties": {
+            "not_in": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "ip"
+              }
+            }
+          }
+        },
+        {
+          "description": "matches if the ip is between the specified range",
+          "type": "object",
+          "required": [
+            "range"
+          ],
+          "properties": {
+            "range": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "string",
+                  "format": "ip"
+                },
+                {
+                  "type": "string",
+                  "format": "ip"
+                }
+              ],
+              "maxItems": 2,
+              "minItems": 2
+            }
+          }
+        }
+      ]
+    },
+    "BasicAuthMatcher": {
+      "type": "object",
+      "required": [
+        "password",
+        "user"
+      ],
+      "properties": {
+        "user": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string"
+        }
+      }
+    },
+    "Stream": {
+      "type": "object",
+      "properties": {
+        "server_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "server_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_protocol_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_protocol_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_tcp_nodelay": {
+          "type": "boolean"
+        },
+        "graceful_shutdown_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "retries": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "retry_backoff": {
+          "$ref": "#/definitions/BackOff"
+        },
+        "balance": {
+          "$ref": "#/definitions/Balance"
+        },
+        "healthcheck": {
+          "$ref": "#/definitions/StreamHealthcheck"
+        },
+        "apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StreamApp"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "StreamHealthcheck": {
+      "type": "object",
+      "required": [
+        "interval"
+      ],
+      "properties": {
+        "interval": {
+          "$ref": "#/definitions/String"
+        }
+      }
+    },
+    "StreamApp": {
+      "allOf": [
+        {
+          "type": "object",
+          "properties": {
+            "listen": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Listen"
+              }
+            },
+            "server_read_timeout": {
+              "$ref": "#/definitions/String"
+            },
+            "server_write_timeout": {
+              "$ref": "#/definitions/String"
+            },
+            "proxy_read_timeout": {
+              "$ref": "#/definitions/String"
+            },
+            "proxy_write_timeout": {
+              "$ref": "#/definitions/String"
+            },
+            "proxy_tcp_nodelay": {
+              "type": "boolean"
+            },
+            "healthcheck": {
+              "$ref": "#/definitions/StreamHealthcheck"
+            }
+          }
+        },
+        {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "proxy"
+              ],
+              "properties": {
+                "proxy": {
+                  "type": "object",
+                  "required": [
+                    "upstream"
+                  ],
+                  "properties": {
+                    "balance": {
+                      "$ref": "#/definitions/Balance"
+                    },
+                    "retries": {
+                      "type": "integer",
+                      "format": "uint",
+                      "minimum": 0.0
+                    },
+                    "retry_backoff": {
+                      "$ref": "#/definitions/BackOff"
+                    },
+                    "proxy_protocol_write_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_read_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_write_timeout": {
+                      "$ref": "#/definitions/String"
+                    },
+                    "proxy_tcp_nodelay": {
+                      "type": "boolean"
+                    },
+                    "healthcheck": {
+                      "$ref": "#/definitions/StreamHealthcheck"
+                    },
+                    "upstream": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/StreamUpstream"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "StreamUpstream": {
+      "type": "object",
+      "required": [
+        "origin"
+      ],
+      "properties": {
+        "origin": {
+          "$ref": "#/definitions/Url"
+        },
+        "weight": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1.0
+        },
+        "sni": {
+          "$ref": "#/definitions/String"
+        },
+        "send_proxy_protocol": {
+          "$ref": "#/definitions/ProxyProtocolVersion"
+        },
+        "proxy_read_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_protocol_write_timeout": {
+          "$ref": "#/definitions/String"
+        },
+        "proxy_tcp_nodelay": {
+          "type": "boolean"
+        },
+        "danger_accept_invalid_certs": {
+          "default": false,
+          "type": "boolean"
+        },
+        "healthcheck": {
+          "$ref": "#/definitions/StreamHealthcheck"
+        },
+        "state_health": {
+          "default": true,
+          "readOnly": true,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
