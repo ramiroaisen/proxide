@@ -67,6 +67,52 @@ impl Debug for Body {
   }
 }
 
+impl From<()> for Body {
+  fn from(_: ()) -> Self {
+    Body::empty()
+  }
+}
+
+impl From<Bytes> for Body {
+  fn from(data: Bytes) -> Self {
+    Body::full(data)
+  }
+}
+
+impl From<Incoming> for Body {
+  fn from(incoming: Incoming) -> Self {
+    Body::incoming(incoming)
+  }
+}
+
+#[cfg(feature = "h3-quinn")]
+impl
+  From<crate::body::h3::quinn::Incoming<::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>>
+  for Body
+{
+  fn from(
+    inner: crate::body::h3::quinn::Incoming<
+      ::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
+    >,
+  ) -> Self {
+    Body::incoming_http3_quinn_client(inner)
+  }
+}
+
+#[cfg(feature = "h3-quinn")]
+impl
+  From<crate::body::h3::quinn::Incoming<::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>>>
+  for Body
+{
+  fn from(
+    inner: crate::body::h3::quinn::Incoming<
+      ::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>,
+    >,
+  ) -> Self {
+    Body::incoming_http3_quinn_server(inner)
+  }
+}
+
 #[pinned_drop]
 impl PinnedDrop for Body {
   fn drop(self: Pin<&mut Self>) {

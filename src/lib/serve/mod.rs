@@ -631,11 +631,17 @@ where
                     }
                   };
 
-                  let (mut send, recv) = request_stream.split();
-                  let body = crate::body::h3::quinn::Incoming::new(recv, None);
-                  let body = Body::incoming_http3_quinn_server(body);
-                  let req = map_request_body(req, |_| body);
+                  let content_length = match req.headers().get(hyper::header::CONTENT_LENGTH) {
+                    Some(c) => match c.to_str() {
+                      Ok(s) => s.parse::<u64>().ok(),
+                      Err(_) => None,
+                    },
+                    None => None,
+                  };
 
+                  let (mut send, recv) = request_stream.split();
+                  let body = crate::body::h3::quinn::Incoming::new(recv, content_length).into();
+                  let req = map_request_body(req, |_| body);
                   let uri = req.uri().clone();
 
                   let result = serve_proxy(
@@ -677,7 +683,7 @@ where
                     let frame = match next {
                       Err(e) => {
                         log::warn!("ERROR body.frame for {remote_addr} => {uri} - {e} - {e:?}");
-                        break;
+                        return;
                       }
 
                       Ok(frame) => {
@@ -752,144 +758,6 @@ where
 
   Ok(graceful_task)
 }
-
-//   while let Some(incoming) = endpoint.accept().await {
-//     let remote_addr = incoming.remote_address();
-//     log::info!("h3 incoming accepted from {}", remote_addr);
-
-//     let config = config.clone();
-//     tokio::spawn(async move {
-//       use bytes::Bytes;
-
-//       let connection_item = ConnectionItem::new(remote_addr.ip(), ConnectionKind::H3Quinn);
-//       let connection_guard = connection_start(connection_item);
-
-//       let connection = match incoming.await {
-//         Err(e) => {
-//           log::warn!("error at h3 incoming.await - {e}: {e:?}");
-//           return;
-//         }
-
-//         Ok(conn) => conn,
-//       };
-//       log::info!("h3 connection established from {}", remote_addr);
-
-//       let h3_connection = h3_quinn::Connection::new(connection);
-//       let mut server_connection: h3::server::Connection<_, Bytes> = {
-//         match h3::server::builder().build(h3_connection).await {
-//           Ok(conn) => conn,
-//           Err(e) => {
-//             log::warn!("h3 server builder build error: {} - {:?}", e, e);
-//             return;
-//           }
-//         }
-//       };
-//       log::info!("h3 server connection established");
-
-//       loop {
-//         let resolver = match server_connection.accept().await {
-//           Err(e) => {
-//             if e.is_h3_no_error() {
-//               break;
-//             } else {
-//               log::warn!("error at h3 accepted.await - {e}: {e:?}");
-//               break;
-//             }
-//           }
-
-//           Ok(None) => break,
-
-//           Ok(Some(resolver)) => resolver,
-//         };
-//         log::info!("h3 request resolver accepted from {}", remote_addr);
-
-//         let config = config.clone();
-//         tokio::spawn(async move {
-//           use crate::{
-//             body::map_request_body,
-//             proxy::service::{serve_proxy, HttpBindKind},
-//           };
-//           use http_body_util::BodyExt;
-
-//           let (req, request_stream) = match resolver.resolve_request().await {
-//             Ok(pair) => pair,
-//             Err(e) => {
-//               log::warn!("error resolving h3 request - {e}: {e:?}");
-//               return;
-//             }
-//           };
-//           log::info!("h3 request resolved from {} => {}", remote_addr, req.uri());
-
-//           let (mut send, recv) = request_stream.split();
-//           let h3_body = h3_util::server_body::H3IncomingServer::new(recv);
-//           let body = crate::body::Body::incoming_h3_quinn_server(h3_body);
-
-//           let req = map_request_body(req, |_| body);
-//           let uri = req.uri().clone();
-
-//           let res = match serve_proxy(
-//             req,
-//             &config,
-//             local_addr,
-//             remote_addr,
-//             None,
-//             HttpBindKind::H3Quinn,
-//           )
-//           .await
-//           {
-//             Ok(response) => response,
-//             Err(e) => {
-//               log::warn!("error handling h3 request - {e}: {e:?}");
-//               todo!();
-//             }
-//           };
-
-//           log::info!("h3 got proxy response for {} => {}", remote_addr, uri);
-
-//           let (res, mut body) = res.into_parts();
-//           let res = Response::from_parts(res, ());
-//           if let Err(e) = send.send_response(res).await {
-//             log::warn!("error sending h3 response - {e}: {e:?}");
-//             return;
-//           }
-
-//           while let Some(next) = body.frame().await {
-//             let frame = match next {
-//               Ok(frame) => frame,
-//               Err(e) => {
-//                 log::warn!("h3 error at body.next() - {e}: {e:?}");
-//                 return;
-//               }
-//             };
-
-//             if frame.is_data() {
-//               let data = frame.into_data().unwrap();
-//               if let Err(e) = send.send_data(data).await {
-//                 log::warn!("h3 error at send_stream.send_data() - {e}: {e:?}");
-//                 return;
-//               };
-//             } else if frame.is_trailers() {
-//               let trailers = frame.into_trailers().unwrap();
-//               if let Err(e) = send.send_trailers(trailers).await {
-//                 log::warn!("h3 error at send_stream.send_trailers() - {e}: {e:?}");
-//                 return;
-//               };
-//             }
-//           }
-
-//           // Close the stream gracefully.
-//           // This is technically only needed when not writing trailers.
-//           // But msquic-h3 requires stream be gracefully closed all the time.
-//           if let Err(e) = send.finish().await {
-//             log::warn!("h3 error at send_stream.finish() - {e}: {e:?}");
-//           };
-//         });
-//       }
-
-//       drop(connection_guard)
-//     });
-//   }
-// };
 
 pub async fn serve_tcp<S, Sig>(
   local_addr: SocketAddr,

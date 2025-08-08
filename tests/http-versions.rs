@@ -9,12 +9,12 @@ fn http_versions() {
 
   block_on(async move {
     let fronts = [
-      // (Version::HTTP_10, "http"),
+      (Version::HTTP_10, "http"),
       // (Version::HTTP_11, "http"),
       // (Version::HTTP_2, "http"),
       // (Version::HTTP_10, "https"),
       // (Version::HTTP_11, "https"),
-      (Version::HTTP_2, "https"),
+      // (Version::HTTP_2, "https"),
       // (Version::HTTP_3, "https"),
     ];
 

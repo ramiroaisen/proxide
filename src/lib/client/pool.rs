@@ -528,51 +528,60 @@ impl Sender {
 
           Protocol::Https => {
             
-            let tls_config = match key.danger_accept_invalid_certs {
+            let client_config = match key.danger_accept_invalid_certs {
               false => {
                   #[static_init::dynamic]
-                  static TLS_CONFIG: rustls::ClientConfig = {
-                    let mut config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                  static CLIENT_CONFIG: quinn::ClientConfig = {
+                    let mut tls_config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
                       .with_protocol_versions(&[&rustls::version::TLS13])
                       .expect("cannot build tls client config with tls1.3 protocol")
                       .with_native_roots()
                       .expect("cannot build tls client config with native roots")
                       .with_no_client_auth();
 
-                    config.enable_early_data = true;
-                    config.alpn_protocols = vec![b"h3".to_vec()];
+                    tls_config.enable_early_data = true;
+                    tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
-                    config
+                    let client_config = quinn::ClientConfig::new(Arc::new(
+                      quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+                        .expect("cannot quinn QuicClientConfig from tls confog")
+                    ));
+
+                    client_config
                   };
 
-                  TLS_CONFIG.clone()
+                  // quinn::ClientConfig is a wrapper around some Arcs, is OK to clone
+                  CLIENT_CONFIG.clone()
                 }
 
               true => {
                 #[static_init::dynamic]
-                static TLS_CONFIG: rustls::ClientConfig = {
-                  let mut config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
+                static CLIENT_CONFIG: quinn::ClientConfig = {
+                  let mut tls_config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
                     .with_protocol_versions(&[&rustls::version::TLS13])
                     .expect("cannot build tls client config with default protocols")
                     .dangerous()
                     .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
                     .with_no_client_auth();
 
-                  config.enable_early_data = true;
-                  config.alpn_protocols = vec![b"h3".to_vec()];
+                  tls_config.enable_early_data = true;
+                  tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
-                  config
+                  let client_config = quinn::ClientConfig::new(Arc::new(
+                    quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
+                      .expect("cannot quinn QuicClientConfig from tls confog")
+                  ));
+
+                  client_config
                 };
 
-                TLS_CONFIG.clone()
+                // quinn::ClientConfig is a wrapper around some Arcs, is OK to clone
+                CLIENT_CONFIG.clone()
               }
             };
 
-            let local_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0u16));
+            let local_addr = std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 0u16));
             let mut client_endpoint = h3_quinn::quinn::Endpoint::client(local_addr).map_err(ConnectError::Http3QuinnLocalBind)?;
-            let client_config = quinn::ClientConfig::new(Arc::new(
-              quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)?
-            ));
             client_endpoint.set_default_client_config(client_config);
 
             let addr = match &key.host {
@@ -852,7 +861,7 @@ impl Pool {
               };
               pool.insert(key, sender);
               let (parts, inconming) = response.into_parts();
-              Response::from_parts(parts, Body::incoming(inconming))
+              Response::from_parts(parts, Body::from(inconming))
             } else {
 
               // in http/1.0 each connection can be used only once
@@ -863,82 +872,6 @@ impl Pool {
               if can_reuse_connection {
                 let (parts, mut incoming) = response.into_parts();
 
-                // opt1: channel, this seems to be very slow
-                // let (body, mut sender) = Body::channel();
-
-                // tokio::spawn(async move {
-                //   loop {
-                //     match incoming.frame().await {
-                //       None => break,
-                //       Some(Err(e)) => {
-                //         let _ = sender.send(Err(e.into())).await;
-                //         return;
-                //       },
-                //       Some(Ok(frame)) => {
-                //         match sender.send(Ok(frame)).await {
-                //           Ok(()) => continue,
-                //           Err(_) => {
-                //             return;
-                //           }
-                //         }
-                //       },
-                //     }
-                //   }
-
-                //   let sender = Sender {
-                //     send: SendRequest::Http1(send),
-                //     uid,
-                //   };
-
-                //   log::warn!("resinserting connection into the pool");
-                //   pool.insert(key, sender);
-                // });
-
-                // Response::from_parts(parts, body)
-
-                // opt2: reinsert on drop
-                // let errored = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-                // let reinsert = defer::defer({
-                //   let errored = errored.clone();
-
-                //   move || {
-                //     if errored.load(Ordering::Acquire) {
-                //       return;
-                //     }
-
-                //     let sender = Sender {
-                //       send: SendRequest::Http1(send),
-                //       uid,
-                //     };
-
-                //     log::debug!("resinserting connection into the pool");
-
-                //     pool.insert(key, sender);
-                //   }
-                // });
-
-                // let stream = async_stream::stream! {
-
-                //  loop {
-                //   let next = incoming.frame().await;
-                //     match next {
-                //       None => break ,
-                //       Some(Ok(frame)) => yield Ok(frame),
-                //       Some(Err(e)) => {
-                //         errored.store(true, Ordering::Release);
-                //         yield Err(e.into());
-                //         break;
-                //       }
-                //     }
-                //   }
-
-                //   drop(reinsert);
-                // };
-
-
-                // opt3: reinsert before yielding last frame
-                // seems that if the stream is ended the poll for None is not called from hyper
                 let stream = async_stream::stream! {
 
                   use hyper::body::Body as HyperBody;
@@ -966,8 +899,6 @@ impl Pool {
                       uid,
                     };
 
-                    log::debug!("resinserting connection into the pool");
-
                     pool.insert(key, sender);
 
                     if let Some(frame) = last_frame {
@@ -979,7 +910,7 @@ impl Pool {
                 Response::from_parts(parts, Body::stream(stream))
               } else {
                 let (parts, incoming) = response.into_parts();
-                Response::from_parts(parts, Body::incoming(incoming))
+                Response::from_parts(parts, Body::from(incoming))
               }
             }
           }
@@ -999,7 +930,7 @@ impl Pool {
 
             let (parts, incoming) = response.into_parts();
 
-            Response::from_parts(parts, Body::incoming(incoming))
+            Response::from_parts(parts, Body::from(incoming))
           }
 
           #[cfg(feature = "h3-quinn")]
@@ -1010,7 +941,7 @@ impl Pool {
             // });
 
             // h3 does not support authority and host header to diverge.
-            // If you have an h3 upstream use an alternative host header in condiguration like X-Forwarded-Host or X-Host
+            // If you have an h3 upstream use an alternative host header in configuration like X-Forwarded-Host or X-Host
             // Note that this will be compared to the SNI host by h3, not to the authority of this request uri
             request.headers_mut().remove(hyper::header::HOST);
             
@@ -1054,14 +985,14 @@ impl Pool {
                     }
                   }
                 }
+              }
 
-                match send.finish().await {
-                  Ok(_) => {},
-                  Err(e) => {
-                    log::warn!("error finishing h3 request - {e}: {e:?}");
-                    return;
-                  },
-                }
+              match send.finish().await {
+                Ok(_) => {},
+                Err(e) => {
+                  log::warn!("error finishing h3 request - {e}: {e:?}");
+                  return;
+                },
               }
             });
 
@@ -1069,8 +1000,15 @@ impl Pool {
               .await
               .map_err(ClientError::Http3QuinnRecvResponse)?;
 
-            let body = crate::body::h3::quinn::Incoming::new(recv, None);
-            let body = crate::body::Body::incoming_http3_quinn_client(body);
+            let content_length = match response.headers().get(hyper::header::CONTENT_LENGTH) {
+              Some(c) => match c.to_str() {
+                Ok(s) => s.parse::<u64>().ok(),
+                Err(_) => None,
+              },
+              None => None,
+            };
+
+            let body = crate::body::h3::quinn::Incoming::new(recv, content_length).into(); 
 
             let (parts, ()) = response.into_parts(); 
             Response::from_parts(parts, body)

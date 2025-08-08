@@ -1549,7 +1549,7 @@ impl Service<Request<Incoming>> for HttpService {
     // we spawn here to avoid cancellation
     // this has almost no impact on performance and help to the predictability of the service as it avoids it being cancelled in-flight
     let handle = tokio::spawn(async move {
-      let req = map_request_body(req, Body::incoming);
+      let req = map_request_body(req, Body::from);
       let bind_kind = match ssl {
         false => HttpBindKind::Http,
         true => HttpBindKind::Https,
