@@ -1,33 +1,22 @@
 use std::time::Duration;
 
-use common::{block_on, send};
+use common::block_on;
 use headers::{HeaderMapExt, Range};
-use http_body_util::BodyExt;
-use proxide::body::Body;
 use tokio::time::sleep;
+
+use crate::common::{client, get};
 
 mod common;
 
 #[test]
 fn static_simple() {
   launch!("static.yml");
-
   block_on(async move {
     for path in ["/file.txt", "/dir/file.txt"] {
-      let req = hyper::Request::builder()
-        .method("GET")
-        .uri(format!("http://127.0.0.1:15300{path}"))
-        .body(Body::empty())
-        .unwrap();
-
-      let res = send(req).await.unwrap();
+      let res = get(&format!("http://127.0.0.1:15300{path}")).await.unwrap();
       assert_status!(res, 200);
       assert_header!(res, "x-test", "static");
-
-      let body =
-        String::from_utf8_lossy(&res.into_body().collect().await.unwrap().to_bytes()).to_string();
-
-      assert_eq!(body, "0123456789");
+      assert_body!(res, "0123456789");
     }
   })
 }
@@ -35,29 +24,20 @@ fn static_simple() {
 #[test]
 fn static_dotfiles() {
   launch!("static.yml");
-
   block_on(async move {
     for dotfiles in ["allow", "error", "ignore"] {
       for path in ["/.dotfile.txt", "/dir/.dotfile.txt"] {
-        let req = hyper::Request::builder()
-          .method("GET")
-          .uri(format!("http://127.0.0.1:15300{path}"))
+        let res = client()
+          .get(&format!("http://127.0.0.1:15300{path}"))
           .header("x-dot-files", dotfiles)
-          .body(Body::empty())
+          .send()
+          .await
           .unwrap();
-
-        sleep(Duration::from_millis(25)).await;
-        let res = send(req).await.unwrap();
-        let (parts, body) = res.into_parts();
-
-        let res = hyper::Response::from_parts(parts, Body::empty());
-
-        let body = String::from_utf8_lossy(&body.collect().await.unwrap().to_bytes()).to_string();
 
         match dotfiles {
           "allow" => {
             assert_status!(res, 200);
-            assert_eq!(body, path);
+            assert_body!(res, path);
           }
           "ignore" => {
             assert_status!(res, 404);
@@ -84,21 +64,10 @@ fn static_index_files() {
 
   block_on(async move {
     for (path, expected) in cases {
-      let req = hyper::Request::builder()
-        .method("GET")
-        .uri(format!("http://127.0.0.1:15300{path}"))
-        .body(Body::empty())
-        .unwrap();
-
-      let res = send(req).await.unwrap();
+      let res = get(&format!("http://127.0.0.1:15300{path}")).await.unwrap();
       assert_status!(res, 200);
       assert_header!(res, "x-test", "static");
-
-      let body =
-        String::from_utf8_lossy(&res.into_body().collect().await.unwrap().to_bytes()).to_string();
-
-      log::info!("{path} -> {expected}");
-      assert_eq!(body, expected);
+      assert_body!(res, expected);
     }
   })
 }
@@ -109,14 +78,7 @@ fn static_dir_redirect() {
 
   block_on(async move {
     for path in ["/dir", "/dir2"] {
-      let req = hyper::Request::builder()
-        .method("GET")
-        .uri(format!("http://127.0.0.1:15300{path}"))
-        .body(Body::empty())
-        .unwrap();
-
-      let res = send(req).await.unwrap();
-
+      let res = get(&format!("http://127.0.0.1:15300{path}")).await.unwrap();
       assert_status!(res, 302);
       assert_header!(res, "x-test", "static");
       assert_header!(res, "location", &format!("{}/", path));
@@ -158,28 +120,23 @@ fn static_ranges() {
 
   block_on(async move {
     for (range, expected) in cases {
+      let range = range.unwrap();
       for path in ["/file.txt", "/dir/file.txt"] {
-        let mut req = hyper::Request::builder()
-          .method("GET")
-          .uri(format!("http://127.0.0.1:15300{path}"))
-          .body(Body::empty())
-          .unwrap();
-
         sleep(Duration::from_millis(10)).await;
 
-        req
-          .headers_mut()
-          .typed_insert(range.as_ref().unwrap().clone());
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.typed_insert(range.clone());
 
-        let res = send(req).await.unwrap();
+        let res = client()
+          .get(&format!("http://127.0.0.1:15300{path}"))
+          .headers(headers)
+          .send()
+          .await
+          .unwrap();
+
         assert_status!(res, 206);
         assert_header!(res, "x-test", "static");
-
-        let body =
-          String::from_utf8_lossy(&res.into_body().collect().await.unwrap().to_bytes()).to_string();
-
-        log::info!("{path} {range:?} -> {expected}");
-        assert_eq!(body, expected);
+        assert_body!(res, expected);
       }
     }
   })
@@ -199,23 +156,17 @@ fn static_follow_symlinks() {
     ];
 
     for (path, expected) in cases {
-      let req = hyper::Request::builder()
-        .method("GET")
+      let res = client()
+        .get(&format!("http://127.0.0.1:15300{path}"))
         .header("x-follow-symlinks", "true")
-        .uri(format!("http://127.0.0.1:15300{path}"))
-        .body(Body::empty())
+        .send()
+        .await
         .unwrap();
 
-      let res = send(req).await.unwrap();
       assert_status!(res, OK);
       assert_header!(res, "x-test-static", "follow-symlinks");
       assert_header!(res, "x-test", "static");
-
-      let body =
-        String::from_utf8_lossy(&res.into_body().collect().await.unwrap().to_bytes()).to_string();
-
-      log::info!("{path} -> {expected}");
-      assert_eq!(body, expected);
+      assert_body!(res, expected);
     }
   })
 }
@@ -234,14 +185,13 @@ fn static_no_follow_symlinks() {
     ];
 
     for path in cases {
-      let req = hyper::Request::builder()
-        .method("GET")
+      let res = client()
+        .get(&format!("http://127.0.0.1:15300{path}"))
         .header("x-follow-symlinks", "false")
-        .uri(format!("http://127.0.0.1:15300{path}"))
-        .body(Body::empty())
+        .send()
+        .await
         .unwrap();
 
-      let res = send(req).await.unwrap();
       assert_status!(res, NOT_FOUND);
       // assert_header!(res, "x-test-static", "follow-symlinks");
       // assert_header!(res, "x-test", "static");

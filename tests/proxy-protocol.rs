@@ -1,5 +1,5 @@
 mod common;
-use common::{block_on, get, https_get};
+use common::{block_on, get};
 use local_ip_address::local_ip;
 
 #[test]
@@ -49,13 +49,8 @@ fn proxy_protocol() {
         }};
       }
 
-      if case.starts_with("https:") {
-        let res = https_get(&case).await.expect("error making request");
-        assert_all!(res);
-      } else {
-        let res = get(&case).await.expect("error making request");
-        assert_all!(res);
-      };
+      let res = get(&case).await.expect("error making request");
+      assert_all!(res);
     }
   })
 }

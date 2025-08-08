@@ -1,6 +1,7 @@
 mod common;
-use common::{block_on, send};
-use proxide::body::Body;
+use common::block_on;
+
+use crate::common::client;
 
 #[test]
 fn server_names() {
@@ -17,15 +18,13 @@ fn server_names() {
     ];
 
     for (name, server) in cases {
-      let req = hyper::Request::builder()
-        .method("GET")
-        .uri(format!("http://127.0.0.1:24000/{name}"))
+      let res = client()
+        .get(&format!("http://127.0.0.1:24000/{name}"))
         .header("host", name)
-        .body(Body::empty())
-        .unwrap();
-      let res = send(req)
+        .send()
         .await
-        .expect("error making request (server names)");
+        .unwrap();
+
       assert_status!(res, OK);
       assert_header!(res, "content-type", "text/plain");
       assert_header!(res, "x-test", "server-names");

@@ -1,11 +1,13 @@
 #![allow(unused)]
 
+use http::Version;
 use hyper::body::Incoming;
 use hyper_util::{
   client::legacy::{connect::HttpConnector, Client},
   rt::TokioExecutor,
 };
 use proxide::body::Body;
+use reqwest::redirect::Policy;
 use tokio::runtime::{Builder, Runtime};
 
 use reqwest_websocket::{RequestBuilderExt, WebSocket};
@@ -15,31 +17,20 @@ pub fn runtime() -> Runtime {
   Builder::new_multi_thread().enable_all().build().unwrap()
 }
 
-pub fn client() -> Client<HttpConnector, Body> {
-  hyper_util::client::legacy::Client::builder(TokioExecutor::new()).build_http()
-}
-
-pub async fn send(
-  req: hyper::Request<Body>,
-) -> Result<hyper::Response<Incoming>, hyper_util::client::legacy::Error> {
-  client().request(req).await
-}
-
-pub async fn get(
-  uri: &str,
-) -> Result<hyper::Response<Incoming>, hyper_util::client::legacy::Error> {
-  let request = hyper::Request::builder()
-    .method("GET")
-    .uri(uri)
-    .body(Body::empty())
-    .unwrap();
-
-  client().request(request).await
-}
-
-pub async fn https_get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
+pub fn client() -> reqwest::Client {
   reqwest::Client::builder()
     .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
+    .build()
+    .unwrap()
+}
+
+pub async fn get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
+  reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
     .build()
     .unwrap()
     .get(url)
@@ -47,25 +38,97 @@ pub async fn https_get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
     .await
 }
 
-pub async fn https_request(request: reqwest::Request) -> Result<reqwest::Response, reqwest::Error> {
+pub async fn h10_get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
+  reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
+    .build()
+    .unwrap()
+    .get(url)
+    .version(reqwest::Version::HTTP_10)
+    .send()
+    .await
+}
+
+pub async fn h11_get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
+  reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
+    .build()
+    .unwrap()
+    .get(url)
+    .version(reqwest::Version::HTTP_11)
+    .send()
+    .await
+}
+
+pub async fn h2_get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
+  reqwest::Client::builder()
+    .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
+    .build()
+    .unwrap()
+    .get(url)
+    .version(reqwest::Version::HTTP_2)
+    .send()
+    .await
+}
+
+pub async fn h3_get(url: &str) -> Result<reqwest::Response, reqwest::Error> {
+  reqwest::Client::builder()
+    .http3_prior_knowledge()
+    .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
+    .build()
+    .unwrap()
+    .get(url)
+    .version(reqwest::Version::HTTP_3)
+    .send()
+    .await
+}
+
+pub async fn request(req: reqwest::Request) -> Result<reqwest::Response, reqwest::Error> {
   let mut client = reqwest::Client::builder()
     .danger_accept_invalid_certs(true)
-    .build()
-    .unwrap();
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none());
 
-  client.ready().await.unwrap();
-  client.call(request).await
+  match req.version() {
+    Version::HTTP_09 | Version::HTTP_10 | Version::HTTP_11 => {
+      client = client.http1_only();
+    }
+
+    Version::HTTP_2 => {
+      client = client.http2_prior_knowledge();
+    }
+
+    Version::HTTP_3 => {
+      client = client.http3_prior_knowledge();
+    }
+
+    _ => unreachable!(),
+  }
+
+  client.build().unwrap().execute(req).await
 }
 
 pub async fn ws(uri: &str) -> Result<WebSocket, reqwest_websocket::Error> {
   let ws = reqwest::Client::builder()
+    .http1_only()
     .danger_accept_invalid_certs(true)
+    .danger_accept_invalid_hostnames(true)
+    .redirect(Policy::none())
     .build()
     .unwrap()
     .get(uri)
     .upgrade()
     .send()
-    .await?
+    .await
+    .unwrap()
     .into_websocket()
     .await?;
 
@@ -189,14 +252,12 @@ macro_rules! assert_header {
 #[macro_export]
 macro_rules! assert_body {
   ($response:expr, $value:expr) => {
-    let bytes = $response.into_body().collect().await.unwrap().to_bytes();
-    let content = String::from_utf8_lossy(&bytes);
+    let content = $response.text().await.unwrap();
     assert_eq!(content, $value);
   };
 
   ($response:expr, $value:expr, $($tt:tt)*) => {
-    let bytes = $response.into_body().collect().await.unwrap().to_bytes();
-    let content = String::from_utf8_lossy(&bytes);
+    let content = $response.text().await.unwrap();
     assert_eq!(content, $value, $($tt)*);
   };
 }

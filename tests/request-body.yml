@@ -2,6 +2,15 @@ http:
   apps: 
     - listen:
         - addr: 23800
+        - addr: 23801
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+        - addr: 23802
+          ssl:
+            h3: true
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
       proxy:
         upstream:
           - base_url: http://127.0.0.1:23850

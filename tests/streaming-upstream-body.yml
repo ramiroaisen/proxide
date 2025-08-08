@@ -1,0 +1,18 @@
+http:
+  apps:
+    - listen:
+        - addr: 23900
+        - addr: 23901
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+        - addr: 23902
+          ssl:
+            h3: true
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:23950
+            version: http/1.1

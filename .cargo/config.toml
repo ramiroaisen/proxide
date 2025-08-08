@@ -1,6 +1,7 @@
 # the tokio/tracing optional feature needs the tokio_unstable flag
+# the reqwest test dependency http3 features needs the reqwest_unstable flag
 [build]
-rustflags = ["--cfg", "tokio_unstable"]
+rustflags = ["--cfg", "tokio_unstable", "--cfg", "reqwest_unstable"]
 
 [profile.release]
 lto = "fat"
@@ -12,4 +13,4 @@ panic = "abort"
 # build-std = ["core", "alloc", "std", "panic_abort"]
 
 [test]
-rustflags = ["--cfg", "tokio_unstable"]
+rustflags = ["--cfg", "tokio_unstable", "--cfg", "reqwest_unstable"]

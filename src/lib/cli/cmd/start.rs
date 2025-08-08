@@ -384,6 +384,8 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   /*
    * this struct contains the mapping between an h3 ssl listen port and the SNI hostnames with their respective [`CertfiedKeys`]
+   * <BindAddress => [SNIHost => CertifiedKey][]>
+   * The combination if BindAddress and SNI is unique and points to the correct certificate to be used
    */
   let mut h3_bind = IndexMap::<SocketAddr, IndexMap<ServerName, Arc<CertifiedKey>>>::new();
 
@@ -759,6 +761,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
       .with_no_client_auth()
       .with_cert_resolver(Arc::new(cert_resolver));
 
+    server_config.max_early_data_size = u32::MAX;
     server_config.alpn_protocols = vec![b"h3".to_vec()];
 
     let server_config = Arc::new(server_config);

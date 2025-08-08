@@ -1,4 +1,3 @@
-use derivative::Derivative;
 use futures::{Future, Stream};
 use parking_lot::Mutex;
 use pin_project::pin_project;
@@ -32,7 +31,7 @@ impl<T> Sender<T> {
    * # use proxide::channel::spsc::SendError;
    * # struct S<T>(T);
    * # impl<T> S<T> {
-   * async fn send(&mut self) -> Result<T, SendError<T>> 
+   * async fn send(&mut self) -> Result<T, SendError<T>>
    * # { todo!() }
    * # }
    * # fn main() {}
@@ -40,7 +39,7 @@ impl<T> Sender<T> {
    * Send a value to the other side.\
    * This function will wait for the other side to receive to value to return.\
    * If the other side is dropped before receiving the value, an error will be returned.
-   * */ 
+   * */
   pub fn send(&mut self, item: T) -> SendFuture<T> {
     SendFuture {
       n: None,
@@ -94,13 +93,13 @@ impl<T> Receiver<T> {
    * ```rust
    * # struct R<T>(T);
    * # impl<T> R<T> {
-   * async fn recv(&mut self) -> Option<T> 
+   * async fn recv(&mut self) -> Option<T>
    * # { todo!() }
    * # }
    * # fn main() {}
    * `````
-   * Receive a value from the other side.\   * 
-   * This function will wait for the other side to send a value to return,\   * 
+   * Receive a value from the other side.\   *
+   * This function will wait for the other side to send a value to return,\   *
    * if the other side is dropped before sending the value, an error will be returned.\
    */
   pub fn recv(&mut self) -> RecvFuture<T> {
@@ -133,7 +132,7 @@ impl<T> Receiver<T> {
     }
   }
 
-  /** 
+  /**
    * Try to receive the inflight value without waiting.\
    * This will only return Some if there are a current inflight value that was not alredy received.\
    */
@@ -199,7 +198,7 @@ impl<T> Future for SendFuture<'_, T> {
           Poll::Ready(Err(SendError(item)))
         } else {
           state.item = Some(item);
-          set_waker(&mut state.send_waker, cx.waker()); 
+          set_waker(&mut state.send_waker, cx.waker());
           if let Some(waker) = state.recv_waker.take() {
             waker.wake();
           }
@@ -261,32 +260,30 @@ impl<T> Future for RecvFuture<'_, T> {
 }
 
 /**
- * Error retuned from [`Sender::send`] if the other side was dropped before receiving the value. \ * 
+ * Error retuned from [`Sender::send`] if the other side was dropped before receiving the value. \ *
  * The error contains the value that was being sent.
  */
-#[derive(Derivative, Eq, PartialEq, thiserror::Error)]
-#[derivative(Debug)]
+#[derive(derive_more::Debug, Eq, PartialEq, thiserror::Error)]
 #[error("channel closed")]
-pub struct SendError<T>(#[derivative(Debug = "ignore")] pub T);
+pub struct SendError<T>(#[debug("ignore")] pub T);
 
 /**
  * Error retuned from [`Sender::try_send`] if the other side was dropped before receiving the value or if there are no pending value available.\
  * The error contains the value that was being sent.
  */
 
-#[derive(thiserror::Error, Eq, PartialEq, Derivative)]
-#[derivative(Debug)]
+#[derive(thiserror::Error, derive_more::Debug, Eq, PartialEq)]
 pub enum TrySendError<T> {
   /**
    * The are already a pending value in this channel.
    */
   #[error("channel is full")]
-  Full(#[derivative(Debug = "ignore")] T),
+  Full(#[debug(ignore)] T),
   /**
    * The other side was dropped.
    */
   #[error("channel is closed")]
-  Closed(#[derivative(Debug = "ignore")] T),
+  Closed(#[debug(ignore)] T),
 }
 
 impl<T> TrySendError<T> {
@@ -295,7 +292,7 @@ impl<T> TrySendError<T> {
    */
   pub fn value(&self) -> &T {
     match self {
-      TrySendError::Full(value) => value, 
+      TrySendError::Full(value) => value,
       TrySendError::Closed(value) => value,
     }
   }
@@ -312,7 +309,7 @@ impl<T> TrySendError<T> {
 }
 
 /**
- * Error retuned from [`Receiver::try_recv`] if the channel is closed and/or the are no pending values 
+ * Error retuned from [`Receiver::try_recv`] if the channel is closed and/or the are no pending values
  */
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum TryRecvError {
@@ -336,11 +333,11 @@ pub enum TryRecvError {
  * # async fn main() {
  * # use proxide::channel::spsc::channel;
  * let (mut sender, mut receiver) = channel::<u8>();
- * 
+ *
  * let send = tokio::spawn(async move {
  *   sender.send(1).await.unwrap();
  * });
- * 
+ *
  * assert_eq!(receiver.recv().await, Some(1));
  * assert_eq!(receiver.recv().await, None);
  * # }
@@ -373,11 +370,7 @@ impl<T> Stream for Receiver<T> {
 
   fn size_hint(&self) -> (usize, Option<usize>) {
     let state = self.state.lock();
-    let down = if state.item.is_some() {
-      1
-    } else {
-      0
-    };
+    let down = if state.item.is_some() { 1 } else { 0 };
 
     let up = if state.sender_dropped {
       if state.item.is_some() {
@@ -389,7 +382,7 @@ impl<T> Stream for Receiver<T> {
       None
     };
 
-    (down, up)    
+    (down, up)
   }
 }
 
@@ -581,7 +574,7 @@ mod test {
     assert_eq!(receiver.next().await.unwrap(), 2);
     assert_eq!(receiver.next().await.unwrap(), 3);
 
-    handle.await.unwrap();    
+    handle.await.unwrap();
 
     assert_eq!(receiver.size_hint(), (0, Some(0)));
 
@@ -691,7 +684,7 @@ mod test {
     tokio::join!(send, recv);
 
     assert_eq!(sender.try_send(2), Ok(()));
-    assert_eq!(sender.try_send(3), Err(TrySendError::Full(3))); 
+    assert_eq!(sender.try_send(3), Err(TrySendError::Full(3)));
 
     assert_eq!(receiver.recv().await.unwrap(), 2);
     drop(receiver);

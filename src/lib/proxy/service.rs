@@ -69,12 +69,20 @@ fn increment_open_connections(atomic: Arc<AtomicUsize>) -> impl Drop {
   })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HttpBindKind {
+  Http,
+  Https,
+  #[cfg(feature = "h3-quinn")]
+  H3Quinn,
+}
+
 #[inline(always)]
 pub fn resolve_upstream_app<'a>(
   host: &str,
   config: &'a Config,
   bind_addr: SocketAddr,
-  bind_ssl: bool,
+  bind_kind: HttpBindKind,
 ) -> Option<&'a HttpApp> {
   for app in &config.http.apps {
     for listen in &app.listen {
@@ -82,7 +90,22 @@ pub fn resolve_upstream_app<'a>(
         continue;
       }
 
-      if listen.ssl.is_some() != bind_ssl {
+      let listen_bind_kind = match &listen.ssl {
+        None => HttpBindKind::Http,
+        Some(ssl) => {
+          #[cfg(feature = "h3-quinn")]
+          if ssl.h3 == Some(true) {
+            HttpBindKind::H3Quinn
+          } else {
+            HttpBindKind::Https
+          }
+
+          #[cfg(not(feature = "h3-quinn"))]
+          HttpBindKind::Https
+        }
+      };
+
+      if listen_bind_kind != bind_kind {
         continue;
       }
 
@@ -153,7 +176,7 @@ pub async fn serve_proxy(
   local_addr: SocketAddr,
   remote_addr: SocketAddr,
   proxy_header: Option<ProxyHeader>,
-  is_ssl: bool,
+  bind_kind: HttpBindKind,
 ) -> Result<Response<Body>, ProxyHttpError> {
   #[cfg(feature = "access-log")]
   let start = std::time::Instant::now();
@@ -188,6 +211,13 @@ pub async fn serve_proxy(
   #[cfg(feature = "interpolation")]
   let request_x_forwarded_port = request.headers().get(X_FORWARDED_PORT).cloned();
 
+  let is_ssl = match bind_kind {
+    HttpBindKind::Http => false,
+    HttpBindKind::Https => true,
+    #[cfg(feature = "h3-quinn")]
+    HttpBindKind::H3Quinn => true,
+  };
+
   #[cfg(feature = "interpolation")]
   let ctx = HttpContext {
     is_ssl,
@@ -206,7 +236,7 @@ pub async fn serve_proxy(
     request_x_forwarded_port: request_x_forwarded_port.as_ref(),
   };
 
-  let app = match resolve_upstream_app(&host, config, local_addr, is_ssl) {
+  let app = match resolve_upstream_app(&host, config, local_addr, bind_kind) {
     Some(app) => app,
     None => {
       return Err(ProxyHttpError::UnresolvedApp);
@@ -1520,7 +1550,20 @@ impl Service<Request<Incoming>> for HttpService {
     // this has almost no impact on performance and help to the predictability of the service as it avoids it being cancelled in-flight
     let handle = tokio::spawn(async move {
       let req = map_request_body(req, Body::incoming);
-      match serve_proxy(req, &config, local_addr, remote_addr, proxy_header, ssl).await {
+      let bind_kind = match ssl {
+        false => HttpBindKind::Http,
+        true => HttpBindKind::Https,
+      };
+      match serve_proxy(
+        req,
+        &config,
+        local_addr,
+        remote_addr,
+        proxy_header,
+        bind_kind,
+      )
+      .await
+      {
         Ok(response) => Ok(response),
         Err(e) => {
           log::warn!("proxy ended with error: {e}");

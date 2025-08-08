@@ -1,13 +1,15 @@
 mod common;
 
-use common::{block_on, send};
-use http::{HeaderName, HeaderValue};
+use common::block_on;
+use http::{HeaderName, HeaderValue, Version};
 use http_body_util::BodyExt;
-use hyper::{body::Incoming, http::Method, service};
+use hyper::{body::Incoming, service};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use proxide::body::Body;
-use std::{convert::Infallible, str::FromStr, time::Duration};
+use std::{convert::Infallible, time::Duration};
 use tokio::net::TcpListener;
+
+use crate::common::request;
 
 #[test]
 fn request_body() {
@@ -52,26 +54,32 @@ fn request_body() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    for method in &["POST", "PUT", "PATCH"] {
-      let request = hyper::Request::builder()
-        .method(Method::from_str(method).unwrap())
-        .uri("http://127.0.0.1:23800/")
-        .body(Body::full(body.clone()))
-        .unwrap();
+    let variants = [
+      (Version::HTTP_10, "http", 23800),
+      (Version::HTTP_11, "http", 23800),
+      (Version::HTTP_2, "http", 23800),
+      (Version::HTTP_10, "https", 23801),
+      (Version::HTTP_11, "https", 23801),
+      (Version::HTTP_2, "https", 23801),
+      (Version::HTTP_3, "https", 23802),
+    ];
 
-      let res = send(request).await.unwrap();
-      let (parts, incoming) = res.into_parts();
-      let res = hyper::Response::from_parts(parts, Body::empty());
+    for (version, scheme, port) in variants {
+      for method in &["POST", "PUT", "PATCH"] {
+        log::info!("testing {version:?} {method} {scheme} {port}");
+        let mut req = reqwest::Request::new(
+          method.parse().unwrap(),
+          format!("{scheme}://127.0.0.1:{port}/").parse().unwrap(),
+        );
+        *req.version_mut() = version;
+        *req.body_mut() = Some(body.clone().into());
 
-      use http_body_util::BodyExt;
-      dbg!(method);
-      let bytes = incoming.collect().await.unwrap().to_bytes();
-      let body = String::from_utf8_lossy(bytes.as_ref());
-      dbg!(body);
+        let res = request(req).await.unwrap();
 
-      assert_status!(res, OK);
-      assert_header!(res, "x-test", "request-body");
-      assert_header!(res, "x-method", method);
+        assert_status!(res, OK);
+        assert_header!(res, "x-test", "request-body");
+        assert_header!(res, "x-method", method);
+      }
     }
   })
 }

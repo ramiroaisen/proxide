@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+  apps:
+    - listen:
+        - addr: 23000
+        - addr: 23001
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+        - addr: 23002
+          ssl:
+            h3: true
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+
+      response_headers:
+        - [ x-version, "${version}" ]
+        - [ x-scheme, "${scheme}" ]
+
+      when:
+        # http
+        - match:
+            path: { exact: /http-1.0 }
+          proxy:
+            upstream:
+              - base_url: http://127.0.0.1:23050
+                version: http/1.0
+        - match:
+            path: { exact: /http-1.1 }
+          proxy:
+            upstream:
+              - base_url: http://127.0.0.1:23050
+                version: http/1.1
+
+        - match:
+            path: { exact: /http-2.0 }
+          proxy:
+            upstream:
+              - base_url: http://127.0.0.1:23050
+                version: http/2
+                danger_accept_invalid_certs: true
+
+        # https
+        - match:
+            path: { exact: /https-1.0 }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:23051
+                version: http/1.0
+                danger_accept_invalid_certs: true
+
+        - match:
+            path: { exact: /https-1.1 }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:23051
+                version: http/1.1
+                danger_accept_invalid_certs: true
+
+        - match:
+            path: { exact: /https-2.0 }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:23051
+                version: http/2
+                danger_accept_invalid_certs: true
+
+        # h3
+        - match:
+            path: { exact: /https-3.0 }
+          proxy:
+            upstream:
+              - base_url: https://127.0.0.1:23052
+                version: http/3
+                danger_accept_invalid_certs: true
+
+    - listen:
+        - addr: 23050
+        - addr: 23051
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+        - addr: 23052
+          ssl:
+            h3: true
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+
+      response_headers:
+        - [ x-upstream-scheme, "${scheme}" ]
+        - [ x-upstream-version, "${version}" ]
+      
+      return:
+        status: 200
+        body: |
+          upstream-scheme: ${scheme}
+          upstream-version: ${version}
+

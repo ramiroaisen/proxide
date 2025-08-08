@@ -28,9 +28,13 @@ fn graceful_shutdown() {
         loop {
           let (stream, _) = server.accept().await.unwrap();
           tokio::spawn(async move {
-            let mut ws = async_tungstenite::tokio::accept_async(stream)
-              .await
-              .unwrap();
+            let mut ws = match async_tungstenite::tokio::accept_async(stream).await {
+              Ok(ws) => ws,
+              Err(e) => {
+                log::warn!("error accepting websocket: {e} - {e:?}");
+                return;
+              }
+            };
 
             loop {
               let msg = match ws.next().await {

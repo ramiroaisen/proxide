@@ -2,7 +2,6 @@ use std::num::NonZeroUsize;
 
 use crate::{config::RLimit, log::LevelFilter, serde::duration::SDuration};
 use clap::{Args as ClapArgs, Parser};
-use derivative::Derivative;
 
 #[derive(Debug, Clone, Parser)]
 #[command(
@@ -50,8 +49,7 @@ pub enum Command {
 //   }
 // }
 
-#[derive(Debug, Clone, Derivative, Parser)]
-#[derivative(Default)]
+#[derive(Debug, Clone, Parser)]
 pub struct Start {
   // path to the configuration file, relative to cwd.
   #[arg(
@@ -60,7 +58,6 @@ pub struct Start {
     default_value = "config.yml",
     env = "PROXIDE_CONFIG"
   )]
-  #[derivative(Default(value = "String::from(\"config.yml\")"))]
   pub config: String,
 
   // sets the current working directory of the process at startup
@@ -85,6 +82,21 @@ pub struct Start {
 
   #[command(flatten)]
   pub stream: Stream,
+}
+
+impl Default for Start {
+  fn default() -> Self {
+    Self {
+      config: String::from("config.yml"),
+      chdir: None,
+      log_level: None,
+      graceful_shutdown_timeout: None,
+      rlimit: RLimit::default(),
+      runtime: StartRuntime::default(),
+      http: Http::default(),
+      stream: Stream::default(),
+    }
+  }
 }
 
 #[derive(Debug, Clone, Default, ClapArgs)]
