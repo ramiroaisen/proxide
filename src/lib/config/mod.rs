@@ -1065,7 +1065,9 @@ pub enum UpstreamVersion {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("invalid upstream version: {0}, expected one of 'http/1.0', 'http/1.1', 'http/2'")]
+#[error(
+  "invalid upstream version: {0}, expected one of 'http/1.0', 'http/1.1', 'http/2', 'http/3'"
+)]
 pub struct InvalidVersionError(String);
 
 impl FromStr for UpstreamVersion {
