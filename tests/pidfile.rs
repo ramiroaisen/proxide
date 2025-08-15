@@ -9,13 +9,12 @@ fn pidfile_new() {
 
   let dir = dir();
   let pidfile = dir.file("pidfile-new.pid");
-  let config_str = include_str!("pidfile.yml")
-    .replace("%PIDFILE%", &pidfile);
+  let config_str = include_str!("pidfile.yml").replace("%PIDFILE%", &pidfile);
 
-  let config: Config = serde_yaml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
-  
+
   let target = std::fs::read_to_string(&pidfile).expect("read pidfile");
 
   assert_eq!(target, std::process::id().to_string());
@@ -26,12 +25,11 @@ fn pidfile_existing() {
   lock!();
   let dir = dir();
   let pidfile = dir.file("pidfile-existing.pid");
-  let config_str = include_str!("pidfile.yml")
-    .replace("%PIDFILE%", &pidfile);
-  
+  let config_str = include_str!("pidfile.yml").replace("%PIDFILE%", &pidfile);
+
   std::fs::write(&pidfile, "1234").expect("write pidfile");
-  let config: Config = serde_yaml::from_str(&config_str).expect("error parsing yaml config file");
-  
+  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
+
   launch!(@parsed config);
 
   let target = std::fs::read_to_string(&pidfile).expect("read pidfile");

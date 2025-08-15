@@ -1126,7 +1126,7 @@ pub enum LoadConfigError {
   Toml(#[from] toml::de::Error),
 
   #[error("{0}")]
-  Yaml(#[from] serde_yaml::Error),
+  Yaml(#[from] serde_yml::Error),
 
   #[error("{0}")]
   Json(#[from] serde_json::Error),
@@ -1205,7 +1205,7 @@ pub fn load(path: &str) -> Result<Config, LoadConfigError> {
 
   let string = std::fs::read_to_string(path)?;
   let config: Config = if path.ends_with(".yml") || path.ends_with(".yaml") {
-    serde_yaml::from_str(&string)?
+    serde_yml::from_str(&string)?
   } else if path.ends_with(".json") {
     serde_json::from_str(&string)?
   } else {
@@ -1243,7 +1243,7 @@ pub mod export {
   #[test]
   fn sample_config_is_valid() {
     let config_str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config.sample.yml"));
-    let config: Config = serde_yaml::from_str(config_str).expect("error parsing yaml config file");
+    let config: Config = serde_yml::from_str(config_str).expect("error parsing yaml config file");
     validate_config(&config).expect("error validating config");
   }
 

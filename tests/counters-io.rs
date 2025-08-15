@@ -27,7 +27,7 @@ fn counters_io() {
   for port in [0, 1, 2, 3] {
     eprintln!("iter: {port}");
     let config_str = include_str!("counters-io.yml");
-    let config: Config = serde_yaml::from_str(config_str).expect("error parsing yaml config file");
+    let config: Config = serde_yml::from_str(config_str).expect("error parsing yaml config file");
 
     let ssl = match port {
       0 | 2 => false,

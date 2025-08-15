@@ -34,7 +34,7 @@ fn cmd_args() {
     .replace("DATA", &data)
     .replace("FSIZE", &fsize);
 
-  let config: Config = serde_yaml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
 

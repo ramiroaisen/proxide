@@ -507,7 +507,7 @@ pub async fn serve_proxy(
 
         HttpHandle::Stats { response_headers } => {
           let json = serde_json::to_value(config).map_err(ProxyHttpError::StatsSerialize)?;
-          let yaml = serde_yaml::to_string(&json).unwrap();
+          let yaml = serde_yml::to_string(&json).unwrap();
           let body = Body::full(yaml);
 
           let mut res = Response::new(body);

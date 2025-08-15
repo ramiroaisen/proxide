@@ -103,7 +103,7 @@ log = { version = "0.4.27", features = ["std"]}
 # formats
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.142", features = ["preserve_order"] }
-serde_yaml = "0.9.34"
+serde_yml = "0.0.12"
 toml = { version = "0.9.5", features = ["preserve_order"] }
 base64 = "0.22.1"
 

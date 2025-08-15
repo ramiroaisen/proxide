@@ -161,7 +161,7 @@ macro_rules! lock {
 macro_rules! launch {
   ($name:ident, $path:literal, $abort:expr) => {
     let config = include_str!($path);
-    let config: proxide::config::Config = serde_yaml::from_str(config).expect("config parse");
+    let config: proxide::config::Config = serde_yml::from_str(config).expect("config parse");
 
     let rt = $crate::common::runtime();
     #[allow(unused_mut)]

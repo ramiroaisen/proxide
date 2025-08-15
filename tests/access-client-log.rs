@@ -20,10 +20,10 @@ fn access_client_log() {
 
   eprintln!("Config: {}", config_str);
 
-  let config: Config = serde_yaml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
-  
+
   block_on(async move {
     for _ in 0..100 {
       let res = get("http://127.0.0.1:21300/").await.unwrap();

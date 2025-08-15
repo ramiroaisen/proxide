@@ -1,17 +1,17 @@
 mod common;
 
-use std::thread;
 use clap::Parser;
 use common::{block_on, dir, get};
 use proxide::config::Config;
+use std::thread;
 
 #[test]
 fn start() {
   lock!();
 
-  let args: proxide::cli::args::Args = proxide::cli::args::Args::try_parse_from(
-    vec![ "proxide", "start", "--config", "tests/cmd.yml" ]
-  ).unwrap();
+  let args: proxide::cli::args::Args =
+    proxide::cli::args::Args::try_parse_from(vec!["proxide", "start", "--config", "tests/cmd.yml"])
+      .unwrap();
 
   thread::spawn(move || {
     proxide::cli::run(args).unwrap();
@@ -34,24 +34,18 @@ fn create_config() {
 
   let out = dir.file("config.yml");
 
-  let args = proxide::cli::args::Args::try_parse_from(
-    vec![
-      "proxide",
-      "create-config",
-      "--output",
-      &out,
-    ]
-  ).unwrap();
+  let args =
+    proxide::cli::args::Args::try_parse_from(vec!["proxide", "create-config", "--output", &out])
+      .unwrap();
 
   proxide::cli::run(args).unwrap();
 
   let config = std::fs::read_to_string(&out).unwrap();
-  let _config: Config = serde_yaml::from_str(&config).unwrap();
+  let _config: Config = serde_yml::from_str(&config).unwrap();
 
   let schema = std::fs::read_to_string(dir.file("config.schema.json")).unwrap();
   let _schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
 }
-
 
 #[test]
 fn create_config_not_override_existing_file() {
@@ -63,14 +57,9 @@ fn create_config_not_override_existing_file() {
   let prev_contents = "no-override";
   std::fs::write(&out, prev_contents).expect("write prev contents");
 
-  let args = proxide::cli::args::Args::try_parse_from(
-    vec![
-      "proxide",
-      "create-config",
-      "--output",
-      &out,
-    ]
-  ).unwrap();
+  let args =
+    proxide::cli::args::Args::try_parse_from(vec!["proxide", "create-config", "--output", &out])
+      .unwrap();
 
   proxide::cli::run(args).unwrap_err();
 
@@ -78,48 +67,45 @@ fn create_config_not_override_existing_file() {
   assert_eq!(post_contents, prev_contents);
 }
 
-
 #[test]
 fn create_config_omit_schema() {
   lock!();
   let dir = dir();
 
   let out = dir.file("config.yml");
-  
-  let args = proxide::cli::args::Args::try_parse_from(
-    vec![
-      "proxide",
-      "create-config",
-      "--output",
-      &out,
-      "--omit-schema",
-    ]
-  ).unwrap();
+
+  let args = proxide::cli::args::Args::try_parse_from(vec![
+    "proxide",
+    "create-config",
+    "--output",
+    &out,
+    "--omit-schema",
+  ])
+  .unwrap();
 
   proxide::cli::run(args).unwrap();
 
   let config = std::fs::read_to_string(&out).unwrap();
-  let _config: Config = serde_yaml::from_str(&config).unwrap();
+  let _config: Config = serde_yml::from_str(&config).unwrap();
 
-  assert!(std::fs::metadata(dir.file("config.schema.json")).is_err()); 
+  assert!(std::fs::metadata(dir.file("config.schema.json")).is_err());
 }
 
 #[test]
 fn create_config_schema() {
   lock!();
-  
+
   let dir = dir();
 
   let out = dir.file("config.schema.json");
 
-  let args = proxide::cli::args::Args::try_parse_from(
-    vec![
-      "proxide",
-      "create-config-schema",
-      "--output",
-      &out,
-    ]
-  ).unwrap();
+  let args = proxide::cli::args::Args::try_parse_from(vec![
+    "proxide",
+    "create-config-schema",
+    "--output",
+    &out,
+  ])
+  .unwrap();
 
   proxide::cli::run(args).unwrap();
 
