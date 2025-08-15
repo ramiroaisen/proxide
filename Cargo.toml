@@ -111,8 +111,8 @@ base64 = "0.22.1"
 async-compression = { version = "0.4.27", features = ["tokio"], optional = true }
 
 # primitives
-anyhow = "1.0.98"
-thiserror = "2.0.12"
+anyhow = "1.0.99"
+thiserror = "2.0.14"
 nonzero = "0.2.0"
 unwrap-infallible = "0.1.5"
 defer = "0.2.1"
@@ -128,12 +128,11 @@ humantime = "2.2.0"
 kanal = { version = "0.1.1", default-features = false, features = ["async"] }
 itertools = "0.14.0"
 time = { version = "0.3.41", features = ["local-offset"] }
-derivative = "2.2.0"
 chrono = { version = "0.4.41", default-features = false, features = ["now", "clock"] }
 crc32fast = "1.5.0"
 
 # cli
-clap = { version = "4.5.43", features = ["derive", "env"] }
+clap = { version = "4.5.45", features = ["derive", "env"] }
 human-panic = { version = "2.0.3", optional = true }
 
 # regex
@@ -152,11 +151,11 @@ tracing = "0.1.41"
 [dev-dependencies]
 axum = "0.7.9"
 local-ip-address = "0.6.5"
-reqwest = { version = "0.12.22", features = ["blocking", "http2", "http3"] }
-reqwest-websocket = "0.5.0"
-tokio = { version = "1.37.0", features = ["full", "test-util"] }
+reqwest = { version = "0.12.23", features = ["blocking", "http2", "http3"] }
+reqwest-websocket = "0.5.1"
+tokio = { version = "1.47.0", features = ["full", "test-util"] }
 tungstenite = "0.27.0"
-async-tungstenite = { version = "0.30.0", features = ["tokio", "tokio-runtime"] }
+async-tungstenite = { version = "0.31.0", features = ["tokio", "tokio-runtime"] }
 tracing = "0.1.41"
 
 

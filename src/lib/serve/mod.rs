@@ -548,44 +548,48 @@ where
           remote_addr,
           remote_address_validated
         );
+
         let config = config.clone();
         tokio::spawn(async move {
           use bytes::Bytes;
+
+          macro_rules! attempt {
+            ($label:expr, $e:expr) => {
+              match $e {
+                Ok(inner) => {
+                  log::info!(
+                    "OK {} await for {} => validated={}",
+                    $label,
+                    remote_addr,
+                    remote_address_validated
+                  );
+                  inner
+                }
+                Err(e) => {
+                  log::warn!(
+                    "ERROR {} error for {} => validated={} - {e} - {e:?}",
+                    $label,
+                    remote_addr,
+                    remote_address_validated
+                  );
+                  return;
+                }
+              }
+            };
+          }
 
           let connection_guard = connection_start(ConnectionItem::new(
             remote_addr.ip(),
             ConnectionKind::H3Quinn,
           ));
 
-          let connection = match incoming.await {
-            Ok(conn) => {
-              log::info!("OK incoming await for {}", remote_addr);
-              conn
-            }
-            Err(e) => {
-              log::warn!("ERROR incoming await for {} - {} - {:?}", remote_addr, e, e);
-              return;
-            }
-          };
+          let connection = attempt!("incoming.await", incoming.await);
 
           let h3_connection = h3_quinn::Connection::new(connection);
-          let mut server_connection: h3::server::Connection<_, Bytes> = {
-            match h3::server::builder().build(h3_connection).await {
-              Ok(conn) => {
-                log::info!("OK h3::server::builder await for {}", remote_addr);
-                conn
-              }
-              Err(e) => {
-                log::warn!(
-                  "ERROR h3::server::builder await for {} - {} - {:?}",
-                  remote_addr,
-                  e,
-                  e
-                );
-                return;
-              }
-            }
-          };
+          let mut server_connection: h3::server::Connection<_, Bytes> = attempt!(
+            "h3::server::builder",
+            h3::server::builder().build(h3_connection).await
+          );
 
           loop {
             match server_connection.accept().await {
@@ -619,17 +623,17 @@ where
                 log::info!("OK server_connection.accept await for {}", remote_addr);
                 let config = config.clone();
                 tokio::spawn(async move {
-                  let (req, request_stream) = match request_resolver.resolve_request().await {
-                    Ok((req, stream)) => {
-                      log::info!("OK request_resolver.resolve_request await for {} resolved => got request for {}", remote_addr, req.uri());
-                      (req, stream)
-                    }
+                  let (req, request_stream) = attempt!(
+                    "request_resolver.resolve_request",
+                    request_resolver.resolve_request().await
+                  );
 
-                    Err(e) => {
-                      log::warn!("ERROR resolve_request error: {} - {:?}", e, e);
-                      return;
-                    }
-                  };
+                  log::info!(
+                    "request from {} => {} {}",
+                    remote_addr,
+                    req.method().as_str(),
+                    req.uri()
+                  );
 
                   let content_length = match req.headers().get(hyper::header::CONTENT_LENGTH) {
                     Some(c) => match c.to_str() {
@@ -640,9 +644,11 @@ where
                   };
 
                   let (mut send, recv) = request_stream.split();
-                  let body = crate::body::h3::quinn::Incoming::new(recv, content_length).into();
-                  let req = map_request_body(req, |_| body);
+                  let body: Body =
+                    crate::body::h3::quinn::Incoming::new(recv, content_length).into();
+
                   let uri = req.uri().clone();
+                  let req = map_request_body(req, |()| body);
 
                   let result = serve_proxy(
                     req,
@@ -662,68 +668,51 @@ where
                   let (parts, mut body) = response.into_parts();
                   let res = Response::from_parts(parts, ());
 
-                  match send.send_response(res).await {
-                    Ok(_) => log::info!("OK send_response await for {remote_addr} => {uri}"),
-                    Err(e) => {
-                      log::warn!(
-                        "ERROR send_response error for {remote_addr} => {uri} - {e} - {e:?}"
-                      );
-                      return;
-                    }
+                  macro_rules! attempt {
+                    ($label:expr, $e:expr) => {
+                      match $e {
+                        Ok(inner) => {
+                          log::info!("OK {} await for {remote_addr} => {uri}", $label);
+                          inner
+                        }
+                        Err(e) => {
+                          log::warn!(
+                            "ERROR {} error for {remote_addr} => {uri} - {e} - {e:?}",
+                            $label
+                          );
+                          return;
+                        }
+                      }
+                    };
                   }
 
-                  use http_body_util::BodyExt;
+                  attempt!("send_response", send.send_response(res).await);
 
                   use crate::{
                     body::{map_request_body, Body},
                     proxy::service::{serve_proxy, HttpBindKind},
                   };
+                  use http_body_util::BodyExt;
 
-                  while let Some(next) = body.frame().await {
-                    let frame = match next {
-                      Err(e) => {
-                        log::warn!("ERROR body.frame for {remote_addr} => {uri} - {e} - {e:?}");
-                        return;
+                  while let Some(frame) = attempt!("body.frame", body.frame().await.transpose()) {
+                    match frame.into_data() {
+                      Ok(data) => {
+                        attempt!("send_data", send.send_data(data).await);
                       }
-
-                      Ok(frame) => {
-                        log::info!("OK body.frame for {remote_addr} - {uri}");
-                        frame
-                      }
-                    };
-
-                    if frame.is_data() {
-                      let data = frame.into_data().unwrap();
-                      match send.send_data(data).await {
-                        Ok(_) => log::info!("OK send_data for {remote_addr} => {uri}"),
-                        Err(e) => {
-                          log::warn!("ERROR send_data for {remote_addr} => {uri} - {e} - {e:?}");
-                          return;
+                      Err(frame) => match frame.into_trailers() {
+                        Ok(trailers) => {
+                          attempt!("send_trailers", send.send_trailers(trailers).await);
                         }
-                      }
-                    } else if frame.is_trailers() {
-                      let trailers = frame.into_trailers().unwrap();
-                      match send.send_trailers(trailers).await {
-                        Ok(_) => log::info!("OK send_trailers for {remote_addr} => {uri}"),
-                        Err(e) => {
-                          log::warn!(
-                            "ERROR send_trailers for {remote_addr} => {uri} - {e} - {e:?}"
-                          );
-                          return;
+
+                        Err(frame) => {
+                          log::warn!("frame is neither data nor trailers: {:?}", frame);
                         }
-                      }
+                      },
                     }
                   }
 
                   log::info!("END incoming body {} => {}", remote_addr, uri);
-
-                  match send.finish().await {
-                    Ok(_) => log::info!("OK send.finish for {} => {}", remote_addr, uri),
-                    Err(e) => {
-                      log::warn!("ERROR finish error: {remote_addr} => {uri} - {e} - {e:?}");
-                      return;
-                    }
-                  }
+                  attempt!("send.finish", send.finish().await);
                 });
               }
             }

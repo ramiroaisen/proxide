@@ -708,9 +708,11 @@ impl Pool {
       };
 
       loop {
-        let mut sender = match deque.lock().pop_front() {
-          Some(sender) => sender,
-          None => break 'deque,
+        let mut sender = {
+          match deque.lock().pop_front() {
+            Some(sender) => sender,
+            None => break 'deque,
+          }
         };
       
         match sender.ready().await {
@@ -947,6 +949,7 @@ impl Pool {
             
             let (parts, mut body) = request.into_parts();
             let request = hyper::Request::from_parts(parts, ());
+            let send2 = send.clone();
 
             let request_stream = send.send_request(request)
               .await
@@ -1008,9 +1011,9 @@ impl Pool {
               None => None,
             };
 
-            let body = crate::body::h3::quinn::Incoming::new(recv, content_length).into(); 
-
+            let mut body: Body = crate::body::h3::quinn::Incoming::new(recv, content_length).into(); 
             let (parts, ()) = response.into_parts(); 
+            body.on_drop(move || drop(send2));
             Response::from_parts(parts, body)
           }
         };

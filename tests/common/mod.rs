@@ -251,13 +251,13 @@ macro_rules! assert_header {
 
 #[macro_export]
 macro_rules! assert_body {
-  ($response:expr, $value:expr) => {
-    let content = $response.text().await.unwrap();
+  ($res:expr, $value:expr) => {
+    let content = $res.text().await.unwrap();
     assert_eq!(content, $value);
   };
 
-  ($response:expr, $value:expr, $($tt:tt)*) => {
-    let content = $response.text().await.unwrap();
+  ($res:expr, $value:expr, $($tt:tt)*) => {
+    let content = $res.text().await.unwrap();
     assert_eq!(content, $value, $($tt)*);
   };
 }

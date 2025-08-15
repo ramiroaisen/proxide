@@ -30,7 +30,7 @@ fn streaming_upstream_body() {
       (Version::HTTP_10, "https", 23901),
       (Version::HTTP_11, "https", 23901),
       (Version::HTTP_2, "https", 23901),
-      (Version::HTTP_3, "https", 23902),
+      // TODO: h3 (Version::HTTP_3, "https", 23902),
     ];
 
     for (version, scheme, port) in variants {

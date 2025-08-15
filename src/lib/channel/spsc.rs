@@ -40,7 +40,7 @@ impl<T> Sender<T> {
    * This function will wait for the other side to receive to value to return.\
    * If the other side is dropped before receiving the value, an error will be returned.
    * */
-  pub fn send(&mut self, item: T) -> SendFuture<T> {
+  pub fn send(&mut self, item: T) -> SendFuture<'_, T> {
     SendFuture {
       n: None,
       item: Some(item),
@@ -102,7 +102,7 @@ impl<T> Receiver<T> {
    * This function will wait for the other side to send a value to return,\   *
    * if the other side is dropped before sending the value, an error will be returned.\
    */
-  pub fn recv(&mut self) -> RecvFuture<T> {
+  pub fn recv(&mut self) -> RecvFuture<'_, T> {
     RecvFuture {
       state: &*self.state,
     }

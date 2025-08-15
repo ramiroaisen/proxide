@@ -1,13 +1,13 @@
 mod common;
 
-use std::time::Duration;
 use common::{block_on, dir};
 use log::Level;
 use proxide::log::logfile::LogFileConfig;
+use std::time::Duration;
 
 use proxide::log::LevelFilter;
 
-async fn log(config_level: LevelFilter, message_level: Level) -> bool { 
+async fn log(config_level: LevelFilter, message_level: Level) -> bool {
   let dir = dir();
 
   let config = LogFileConfig {
@@ -31,13 +31,12 @@ async fn log(config_level: LevelFilter, message_level: Level) -> bool {
 
 #[test]
 fn log_level() {
-  
   launch!("log-level.yml");
 
   block_on(async move {
-    use log::Level::*;    
+    use log::Level::*;
 
-    let levels = [ Error, Warn, Info, Debug, Trace ];
+    let levels = [Error, Warn, Info, Debug, Trace];
 
     for (i, config_level) in levels.into_iter().enumerate() {
       for show in &levels[..i] {

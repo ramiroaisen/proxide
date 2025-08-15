@@ -10,21 +10,21 @@ fn http_versions() {
   block_on(async move {
     let fronts = [
       (Version::HTTP_10, "http"),
-      // (Version::HTTP_11, "http"),
-      // (Version::HTTP_2, "http"),
-      // (Version::HTTP_10, "https"),
-      // (Version::HTTP_11, "https"),
-      // (Version::HTTP_2, "https"),
-      // (Version::HTTP_3, "https"),
+      (Version::HTTP_11, "http"),
+      (Version::HTTP_2, "http"),
+      (Version::HTTP_10, "https"),
+      (Version::HTTP_11, "https"),
+      (Version::HTTP_2, "https"),
+      // TODO: h3 (Version::HTTP_3, "https"),
     ];
 
     let upstreams = [
-      // ("http", "1.0"),
-      // ("http", "1.1"),
-      // ("http", "2.0"),
-      // ("https", "1.0"),
-      // ("https", "1.1"),
-      // ("https", "2.0"),
+      ("http", "1.0"),
+      ("http", "1.1"),
+      ("http", "2.0"),
+      ("https", "1.0"),
+      ("https", "1.1"),
+      ("https", "2.0"),
       ("https", "3.0"),
     ];
 

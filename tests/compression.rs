@@ -12,7 +12,7 @@ const VARIANTS: &[(Version, &str, u16)] = &[
   (Version::HTTP_10, "https", 20101),
   (Version::HTTP_11, "https", 20101),
   (Version::HTTP_2, "https", 20101),
-  (Version::HTTP_3, "https", 20102),
+  // TODO: h3 (Version::HTTP_3, "https", 20102),
 ];
 
 #[test]

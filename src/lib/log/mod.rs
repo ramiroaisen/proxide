@@ -8,9 +8,8 @@ pub use display::{
 pub use level::{AtomicLevelFilter, LevelFilter};
 
 use logfile::LogFileConfig;
-use logger::Logger;
 
-use crate::once;
+use crate::{log::logger::Logger, once};
 
 use static_init::dynamic;
 use std::sync::{atomic::Ordering, Arc};
@@ -72,19 +71,20 @@ pub fn init_or_update(
   log::set_max_level(level_filter);
 
   if once!() {
-    use tracing_subscriber::prelude::*;
-    let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
-      .or_else(|_| tracing_subscriber::EnvFilter::try_new("debug"))
-      .unwrap();
+    // use tracing_subscriber::prelude::*;
+    // let filter_layer = tracing_subscriber::EnvFilter::try_from_default_env()
+    //   .or_else(|_| tracing_subscriber::EnvFilter::try_new("debug"))
+    //   .unwrap();
 
-    let fmt_layer = tracing_subscriber::fmt::layer();
+    // let fmt_layer = tracing_subscriber::fmt::layer();
 
-    tracing_subscriber::registry()
-      .with(filter_layer)
-      .with(fmt_layer)
-      .init();
+    // tracing_subscriber::registry()
+    //   .with(filter_layer)
+    //   .with(fmt_layer)
+    //   .init();
 
-    // log::set_boxed_logger(Box::new(Logger::new(GLOBAL_LOG_LEVEL.clone()))).expect("failed to set logger");
+    log::set_boxed_logger(Box::new(Logger::new(GLOBAL_LOG_LEVEL.clone())))
+      .expect("failed to set logger");
   }
 }
 
