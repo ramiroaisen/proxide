@@ -7,11 +7,9 @@ use tokio::net::TcpListener;
 #[test]
 fn graceful_shutdown() {
   for port in 0..4_u16 {
-    let (abort, abort_recv) = tokio::sync::oneshot::channel::<()>();
+    let cancel = tokio_util::sync::CancellationToken::new();
 
-    launch!(handle, "graceful-shutdown.yml", async move {
-      abort_recv.await.unwrap();
-    });
+    launch!(handle, "graceful-shutdown.yml", cancel.clone());
 
     block_on(async move {
       let scheme = match port {
@@ -64,7 +62,7 @@ fn graceful_shutdown() {
 
       tokio::time::sleep(Duration::from_millis(100)).await;
 
-      abort.send(()).unwrap();
+      cancel.cancel();
 
       tokio::select! {
         _ = &mut handle => panic!("handle should not return first"),

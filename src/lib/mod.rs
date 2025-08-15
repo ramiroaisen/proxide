@@ -20,7 +20,6 @@ pub mod serde;
 pub mod serve;
 #[cfg(feature = "serve-static")]
 pub mod serve_static;
-pub mod service;
 #[cfg(feature = "stats")]
 pub mod stats;
 pub mod tls;

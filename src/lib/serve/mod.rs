@@ -1,8 +1,4 @@
-use hyper::{
-  body::{Body, Incoming},
-  service::{HttpService, Service},
-  Request, Response,
-};
+use hyper::{body::Incoming, Request, Response};
 use hyper_util::{
   rt::{TokioExecutor, TokioIo},
   server::conn::auto,
@@ -10,7 +6,7 @@ use hyper_util::{
 use indexmap::IndexSet;
 use parking_lot::Mutex;
 use rustls::ServerConfig;
-use std::future::Future;
+use std::{convert::Infallible, future::Future};
 use std::{
   fmt::Display,
   net::{IpAddr, SocketAddr},
@@ -22,16 +18,43 @@ use std::{
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
-use tokio_util::time::FutureExt;
+use tokio_util::{sync::CancellationToken, time::FutureExt};
+
+fn service_fn<F, Fut>(f: F) -> ServiceFn<F>
+where
+  F: FnOnce(Request<Incoming>) -> Fut,
+  F: Clone,
+  Fut: Future<Output = Result<Response<crate::body::Body>, Infallible>>,
+{
+  ServiceFn { f }
+}
+struct ServiceFn<F> {
+  f: F,
+}
+
+impl<F, Fut> hyper::service::Service<Request<Incoming>> for ServiceFn<F>
+where
+  F: FnOnce(Request<Incoming>) -> Fut,
+  F: Clone,
+  Fut: Future<Output = Result<Response<crate::body::Body>, Infallible>>,
+{
+  type Response = Response<crate::body::Body>;
+  type Error = Infallible;
+  type Future = Fut;
+
+  fn call(&self, req: Request<Incoming>) -> Self::Future {
+    (self.f.clone())(req)
+  }
+}
 
 #[cfg(feature = "h3-quinn")]
 use crate::config::Config;
 use crate::{
+  body::map_request_body,
   graceful::GracefulGuard,
   net::timeout::TimeoutIo,
-  proxy::service::MakeHttpService,
+  proxy::service::{serve_proxy, serve_stream_proxy, HttpBindKind},
   proxy_protocol::{ExpectProxyProtocol, ProxyHeader},
-  service::{Connection, StreamService},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -186,32 +209,17 @@ fn server() -> auto::Builder<TokioExecutor> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn serve_http<M, S, B, Sig>(
+pub async fn serve_http(
+  config: Arc<Config>,
   local_addr: SocketAddr,
   tcp: TcpListener,
-  make_service: M,
-  signal: Sig,
+  cancel: CancellationToken,
   read_timeout: Duration,
   write_timeout: Duration,
   graceful_shutdown_timeout: Option<Duration>,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
   proxy_protocol_read_timeout: Duration,
-) where
-  M: MakeHttpService<Service = S>,
-  S: Clone,
-  S: Service<Request<Incoming>, Response = Response<B>> + Send + 'static,
-  <S as Service<Request<Incoming>>>::Future: Send + 'static,
-  <S as Service<Request<Incoming>>>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-  S: HttpService<Incoming, ResBody = B>,
-  <S as HttpService<Incoming>>::Future: Send + 'static,
-  <S as HttpService<Incoming>>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-  B: Body + Send + 'static,
-  B::Data: Send,
-  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-  Sig: Future<Output = ()>,
-{
-  tokio::pin!(signal);
-
+) {
   let graceful = crate::graceful::GracefulShutdown::new();
 
   let http = server();
@@ -221,7 +229,11 @@ pub async fn serve_http<M, S, B, Sig>(
 
   let accept_task = {
     let graceful = graceful.clone();
+
     async move {
+      let cancelled = cancel.cancelled();
+      tokio::pin!(cancelled);
+
       loop {
         tokio::select! {
           accept = tcp.accept() => {
@@ -275,7 +287,7 @@ pub async fn serve_http<M, S, B, Sig>(
             });
           },
 
-          _ = &mut signal => {
+          _ = &mut cancelled => {
             break;
           }
         };
@@ -287,6 +299,7 @@ pub async fn serve_http<M, S, B, Sig>(
 
   let connection_task = async move {
     loop {
+      let config = config.clone();
       let (stream, remote_addr, proxy_header) = match conn_recv.recv().await {
         Ok(conn) => conn,
         Err(_) => break,
@@ -299,7 +312,24 @@ pub async fn serve_http<M, S, B, Sig>(
         write_timeout,
       )));
 
-      let service = make_service.make_service(local_addr, remote_addr, false, proxy_header);
+      let service = service_fn(move |req| async move {
+        let req: Request<crate::body::Body> =
+          map_request_body(req, |incoming: Incoming| incoming.into());
+        match serve_proxy(
+          req,
+          &config,
+          local_addr,
+          remote_addr,
+          proxy_header,
+          HttpBindKind::Http,
+        )
+        .await
+        {
+          Ok(response) => Ok::<_, Infallible>(response),
+          Err(e) => Ok(e.to_response()),
+        }
+      });
+
       let conn = http
         .serve_connection_with_upgrades(io, service)
         .into_owned();
@@ -332,36 +362,21 @@ pub async fn serve_http<M, S, B, Sig>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn serve_https<M, S, B, Sig>(
+pub async fn serve_https(
+  config: Arc<Config>,
   local_addr: SocketAddr,
   tcp: TcpListener,
   tls_config: Arc<ServerConfig>,
-  make_service: M,
-  signal: Sig,
+  cancel: CancellationToken,
   read_timeout: Duration,
   write_timeout: Duration,
   graceful_shutdown_timeout: Option<Duration>,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
   proxy_protocol_read_timeout: Duration,
-) where
-  M: MakeHttpService<Service = S>,
-  S: Clone,
-  S: Service<Request<Incoming>, Response = Response<B>> + Send + 'static,
-  <S as Service<Request<Incoming>>>::Future: Send + 'static,
-  <S as Service<Request<Incoming>>>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-  S: HttpService<Incoming, ResBody = B>,
-  <S as HttpService<Incoming>>::Future: Send + 'static,
-  <S as HttpService<Incoming>>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-  B: Body + Send + 'static,
-  B::Data: Send,
-  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-  Sig: Future<Output = ()>,
-{
+) {
   let tls_acceptor = TlsAcceptor::from(tls_config);
 
   let graceful = crate::graceful::GracefulShutdown::new();
-
-  tokio::pin!(signal);
 
   let (conn_sender, conn_recv) = kanal::bounded_async::<(
     TlsStream<GracefulGuard<TcpStream>>,
@@ -372,6 +387,9 @@ pub async fn serve_https<M, S, B, Sig>(
   let accept_task = {
     let graceful = graceful.clone();
     async move {
+      let cancelled = cancel.cancelled();
+      tokio::pin!(cancelled);
+
       loop {
         tokio::select! {
           accept = tcp.accept() => {
@@ -422,7 +440,7 @@ pub async fn serve_https<M, S, B, Sig>(
             });
           },
 
-          _ = &mut signal => {
+          _ = &mut cancelled => {
             break;
           }
         }
@@ -436,6 +454,7 @@ pub async fn serve_https<M, S, B, Sig>(
     let http = server();
 
     loop {
+      let config = config.clone();
       let (tls_stream, remote_addr, proxy_header) = match conn_recv.recv().await {
         Ok(tls_stream) => tls_stream,
         Err(_) => break,
@@ -448,7 +467,24 @@ pub async fn serve_https<M, S, B, Sig>(
         write_timeout,
       )));
 
-      let service = make_service.make_service(local_addr, remote_addr, true, proxy_header);
+      let service = service_fn(move |req| async move {
+        let req: Request<crate::body::Body> =
+          map_request_body(req, |incoming: Incoming| incoming.into());
+        match serve_proxy(
+          req,
+          &config,
+          local_addr,
+          remote_addr,
+          proxy_header,
+          HttpBindKind::Https,
+        )
+        .await
+        {
+          Ok(response) => Ok::<_, Infallible>(response),
+          Err(e) => Ok(e.to_response()),
+        }
+      });
+
       let conn = http
         .serve_connection_with_upgrades(io, service)
         .into_owned();
@@ -483,18 +519,15 @@ pub async fn serve_https<M, S, B, Sig>(
 
 #[cfg(feature = "h3-quinn")]
 #[allow(clippy::too_many_arguments)]
-pub fn serve_h3_quinn<Sig>(
+pub fn serve_h3_quinn(
   local_addr: SocketAddr,
   config: Arc<Config>,
   tls_config: Arc<ServerConfig>,
-  signal: Sig,
+  cancel_token: CancellationToken,
   // read_timeout: Duration,
   // write_timeout: Duration,
   graceful_shutdown_timeout: Option<Duration>,
-) -> Result<impl Future<Output = ()>, H3QuinnBindError>
-where
-  Sig: Future<Output = ()>,
-{
+) -> Result<impl Future<Output = ()>, H3QuinnBindError> {
   use quinn::{crypto::rustls::QuicServerConfig, default_runtime};
   use socket2::Protocol;
 
@@ -723,10 +756,13 @@ where
       }
     };
 
+    let cancelled = cancel_token.cancelled();
+    tokio::pin!(cancelled);
+
     tokio::select! {
       _ = accept_task => {}
 
-      _ = signal => {
+      _ = &mut cancelled => {
         match graceful_shutdown_timeout {
           None => {
             endpoint.wait_idle().await;
@@ -748,84 +784,96 @@ where
   Ok(graceful_task)
 }
 
-pub async fn serve_tcp<S, Sig>(
+pub async fn serve_tcp(
+  config: Arc<Config>,
   local_addr: SocketAddr,
   tcp: TcpListener,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
-  service: S,
-  signal: Sig,
+  signal: CancellationToken,
   graceful_shutdown_timeout: Option<Duration>,
   proxy_protocol_read_timeout: Duration,
-) where
-  S: StreamService<GracefulGuard<TcpStream>>,
-  S::Error: std::error::Error,
-  S::Future: Send + 'static,
-  Sig: Future<Output = ()>,
-{
-  tokio::pin!(signal);
+) {
+  use tokio::io::{AsyncRead, AsyncWrite};
 
   let graceful = crate::graceful::GracefulShutdown::new();
 
-  {
-    let graceful = graceful.clone();
-    async move {
-      loop {
-        tokio::select! {
-          accept = tcp.accept() => {
-            let (stream, remote_addr) = match accept {
-              Ok(accept) => accept,
-              Err(e) => {
-                log::error!("error accepting tcp stream in tcp mode {e}, panicking");
-                panic!("error accepting tcp stream in tcp mode {e}");
-              }
-            };
+  let is_ssl = false;
 
-            macro_rules! serve {
-              ($stream:expr, $proxy_header:expr) => {{
-                let fut = service.serve(Connection { stream: $stream, proxy_header: $proxy_header, remote_addr, local_addr, is_ssl: false });
+  let graceful_clone = graceful.clone();
+  let accept_task = async move {
+    let cancelled = signal.cancelled();
+    tokio::pin!(cancelled);
 
-                let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Tcp);
-                let guard = connection_start(connection);
+    fn serve<S>(
+      config: Arc<Config>,
+      stream: S,
+      proxy_header: Option<ProxyHeader>,
+      remote_addr: SocketAddr,
+      local_addr: SocketAddr,
+      is_ssl: bool,
+    ) where
+      S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
+      let fut = serve_stream_proxy(
+        config,
+        stream,
+        local_addr,
+        remote_addr,
+        is_ssl,
+        proxy_header,
+      );
+      let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Tcp);
+      let guard = connection_start(connection);
+      tokio::spawn(async move {
+        if let Err(e) = fut.await {
+          log::warn!("error handling tcp connection - {e}: {e:?}");
+        }
+        drop(guard);
+      });
+    }
 
-                tokio::spawn(async move {
-                  if let Err(e) = fut.await {
-                    log::warn!("error handling tcp connection - {e}: {e:?}");
-                  }
-                  drop(guard);
-                });
-              }}
+    loop {
+      tokio::select! {
+        accept = tcp.accept() => {
+          let (stream, remote_addr) = match accept {
+            Ok(accept) => accept,
+            Err(e) => {
+              log::error!("error accepting tcp stream in tcp mode {e}, panicking");
+              panic!("error accepting tcp stream in tcp mode {e}");
             }
+          };
 
-            let mut graceful_stream = graceful.guard(stream);
-            match expect_proxy_protocol {
-              None => serve!(graceful_stream, None),
-              Some(version) => {
-                let header = match crate::proxy_protocol::read(&mut graceful_stream, version).timeout(proxy_protocol_read_timeout).await {
-                  Ok(Ok(header)) => header,
-                  Ok(Err(e)) => {
-                    log::warn!("error reading proxy protocol header(2): {e}");
-                    continue;
-                  }
-                  Err(_) => {
-                    log::warn!("error reading proxy protocol(2): timeout after {proxy_protocol_read_timeout:?}");
-                    continue;
-                  }
-                };
+          let mut graceful_stream = graceful_clone.guard(stream);
+          match expect_proxy_protocol {
+            None => serve(config.clone(), graceful_stream, None, remote_addr, local_addr, is_ssl),
+            Some(version) => {
+              let header = match crate::proxy_protocol::read(&mut graceful_stream, version).timeout(proxy_protocol_read_timeout).await {
+                Ok(Ok(header)) => header,
+                Ok(Err(e)) => {
+                  log::warn!("error reading proxy protocol header(2): {e}");
+                  continue;
+                }
+                Err(_) => {
+                  log::warn!("error reading proxy protocol(2): timeout after {proxy_protocol_read_timeout:?}");
+                  continue;
+                }
+              };
 
-                serve!(graceful_stream, Some(header))
-              }
+              serve(config.clone(), graceful_stream, Some(header), remote_addr, local_addr, is_ssl)
             }
-          }
-
-          _ = &mut signal => {
-            break;
           }
         }
-      }
 
-      drop(tcp);
-    }.await;
+        _ = &mut cancelled => {
+          break;
+        }
+      }
+    }
+
+    drop(tcp);
   };
+
+  accept_task.await;
 
   if let Some(timeout) = graceful_shutdown_timeout {
     if graceful.shutdown().timeout(timeout).await.is_err() {
@@ -841,29 +889,27 @@ pub async fn serve_tcp<S, Sig>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn serve_ssl<S, Sig>(
+pub async fn serve_ssl(
+  config: Arc<Config>,
   local_addr: SocketAddr,
   tcp: TcpListener,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
-  config: Arc<ServerConfig>,
-  service: S,
-  signal: Sig,
+  tls_config: Arc<ServerConfig>,
+  signal: CancellationToken,
   graceful_shutdown_timeout: Option<Duration>,
   proxy_protocol_read_timeout: Duration,
-) where
-  S: StreamService<GracefulGuard<TlsStream<TcpStream>>>,
-  S::Error: std::error::Error,
-  S::Future: Send + 'static,
-  Sig: Future<Output = ()>,
-{
+) {
   tokio::pin!(signal);
 
   let (conn_sender, conn_recv) =
     kanal::bounded_async::<(TlsStream<TcpStream>, SocketAddr, Option<ProxyHeader>)>(0);
 
-  let tls_acceptor = TlsAcceptor::from(config);
+  let tls_acceptor = TlsAcceptor::from(tls_config);
 
   let accept_task = async move {
+    let cancelled = signal.cancelled();
+    tokio::pin!(cancelled);
+
     loop {
       tokio::select! {
         accept = tcp.accept() => {
@@ -906,7 +952,7 @@ pub async fn serve_ssl<S, Sig>(
           });
         }
 
-        _ = &mut signal => break,
+        _ = &mut cancelled => break,
       }
     }
 
@@ -919,13 +965,14 @@ pub async fn serve_ssl<S, Sig>(
     while let Ok((stream, remote_addr, proxy_header)) = conn_recv.recv().await {
       let graceful_stream = graceful.guard(stream);
 
-      let fut = service.serve(Connection {
-        stream: graceful_stream,
-        proxy_header,
-        remote_addr,
+      let fut = serve_stream_proxy(
+        config.clone(),
+        graceful_stream,
         local_addr,
-        is_ssl: true,
-      });
+        remote_addr,
+        true,
+        proxy_header,
+      );
 
       let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Ssl);
       let guard = connection_start(connection);

@@ -4,19 +4,15 @@
 use http::Uri;
 use hyper::body::Body as HyperBody;
 use hyper::header::{HeaderName, HeaderValue, CONNECTION, CONTENT_TYPE, HOST, SERVER};
-use hyper::{body::Incoming, service::Service, Request, Response};
 use hyper::{Method, StatusCode};
+use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use pin_project::pin_project;
 use rustls_pki_types::ServerName;
-use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll};
+use std::sync::Arc;
 use std::time::Duration;
-use std::{convert::Infallible, pin::Pin, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::task::JoinHandle;
 
 #[cfg(feature = "interpolation")]
 use super::context::HttpContext;
@@ -24,7 +20,7 @@ use super::error::ProxyStreamError;
 use super::header::CONNECTION_UPGRADE;
 use super::util::{remove_hop_headers, resolve_host_port};
 use crate::backoff::BackOff;
-use crate::body::{map_request_body, Body};
+use crate::body::Body;
 use crate::client::pool::ProxyProtocolConfig;
 use crate::client::send_request;
 use crate::config::defaults::{
@@ -53,7 +49,6 @@ use crate::proxy_protocol::ProxyHeader;
 use crate::serde::content_type::ContentTypeMatcher;
 use crate::serde::duration::SDuration;
 use crate::serde::url::StreamUpstreamScheme;
-use crate::service::{Connection, StreamService};
 #[cfg(feature = "stats")]
 use crate::stats::counters_io::CountersIo;
 use crate::upgrade::{request_connection_upgrade, response_connection_upgrade};
@@ -1202,12 +1197,12 @@ pub async fn serve_proxy(
 }
 
 pub async fn serve_stream_proxy<S: AsyncWrite + AsyncRead + Unpin>(
+  config: Arc<Config>,
   stream: S,
   local_addr: SocketAddr,
   remote_addr: SocketAddr,
   is_ssl: bool,
   proxy_header: Option<ProxyHeader>,
-  config: &Config,
 ) -> Result<(), ProxyStreamError> {
   let app = 'resolve: {
     for app in &config.stream.apps {
@@ -1454,182 +1449,5 @@ async fn copy<A: AsyncRead + AsyncWrite + Unpin, B: AsyncRead + AsyncWrite + Unp
   match tokio::io::copy_bidirectional(a, b).await {
     Ok(_) => Ok(()),
     Err(e) => Err(ProxyStreamError::Copy(e)),
-  }
-}
-
-pub trait MakeHttpService {
-  type Service: Service<Request<Incoming>>;
-  fn make_service(
-    &self,
-    local_addr: SocketAddr,
-    remote_addr: SocketAddr,
-    ssl: bool,
-    proxy_header: Option<ProxyHeader>,
-  ) -> Self::Service;
-}
-
-#[derive(Debug, Clone)]
-pub struct HttpMakeService {
-  config: Arc<Config>,
-}
-
-impl HttpMakeService {
-  pub fn new(config: Arc<Config>) -> Self {
-    Self { config }
-  }
-}
-
-impl MakeHttpService for HttpMakeService {
-  type Service = HttpService;
-
-  fn make_service(
-    &self,
-    local_addr: SocketAddr,
-    remote_addr: SocketAddr,
-    ssl: bool,
-    proxy_header: Option<ProxyHeader>,
-  ) -> Self::Service {
-    HttpService::new(
-      self.config.clone(),
-      local_addr,
-      remote_addr,
-      ssl,
-      proxy_header,
-    )
-  }
-}
-
-#[derive(Debug, Clone)]
-pub struct HttpService {
-  config: Arc<Config>,
-  local_addr: SocketAddr,
-  remote_addr: SocketAddr,
-  ssl: bool,
-  proxy_header: Option<ProxyHeader>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProxyServiceInner {
-  pub config: Arc<Config>,
-  pub addr: SocketAddr,
-  pub ssl: bool,
-}
-
-impl HttpService {
-  pub fn new(
-    config: Arc<Config>,
-    local_addr: SocketAddr,
-    remote_addr: SocketAddr,
-    ssl: bool,
-    proxy_header: Option<ProxyHeader>,
-  ) -> Self {
-    Self {
-      config,
-      local_addr,
-      remote_addr,
-      ssl,
-      proxy_header,
-    }
-  }
-}
-
-impl Service<Request<Incoming>> for HttpService {
-  type Response = Response<Body>;
-  type Error = Infallible;
-  type Future = ServiceFuture<Result<Self::Response, Self::Error>>;
-
-  fn call(&self, req: Request<Incoming>) -> Self::Future {
-    let Self {
-      config,
-      local_addr,
-      remote_addr,
-      ssl,
-      proxy_header,
-    } = self.clone();
-    // we spawn here to avoid cancellation
-    // this has almost no impact on performance and help to the predictability of the service as it avoids it being cancelled in-flight
-    let handle = tokio::spawn(async move {
-      let req = map_request_body(req, Body::from);
-      let bind_kind = match ssl {
-        false => HttpBindKind::Http,
-        true => HttpBindKind::Https,
-      };
-      match serve_proxy(
-        req,
-        &config,
-        local_addr,
-        remote_addr,
-        proxy_header,
-        bind_kind,
-      )
-      .await
-      {
-        Ok(response) => Ok(response),
-        Err(e) => {
-          log::warn!("proxy ended with error: {e}");
-          Ok(e.to_response())
-        }
-      }
-    });
-
-    ServiceFuture { inner: handle }
-  }
-}
-
-pub struct ProxyStreamService {
-  config: Arc<Config>,
-}
-
-impl ProxyStreamService {
-  pub fn new(config: Arc<Config>) -> Self {
-    Self { config }
-  }
-}
-
-impl<S: AsyncWrite + AsyncRead + Unpin + Send + 'static> StreamService<S> for ProxyStreamService {
-  type Future = ServiceFuture<Result<(), ProxyStreamError>>;
-  type Error = ProxyStreamError;
-
-  fn serve(&self, connection: Connection<S>) -> Self::Future {
-    let Connection {
-      stream,
-      local_addr,
-      remote_addr,
-      proxy_header,
-      is_ssl,
-    } = connection;
-
-    let config = self.config.clone();
-
-    let handle = tokio::spawn(async move {
-      serve_stream_proxy(
-        stream,
-        local_addr,
-        remote_addr,
-        is_ssl,
-        proxy_header,
-        &config,
-      )
-      .await
-    });
-
-    ServiceFuture { inner: handle }
-  }
-}
-
-#[pin_project]
-pub struct ServiceFuture<O> {
-  #[pin]
-  inner: JoinHandle<O>,
-}
-
-impl<O> Future for ServiceFuture<O> {
-  type Output = O;
-
-  fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-    match self.project().inner.poll(cx) {
-      Poll::Ready(o) => Poll::Ready(o.unwrap()),
-      Poll::Pending => Poll::Pending,
-    }
   }
 }

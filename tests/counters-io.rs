@@ -93,6 +93,7 @@ fn counters_io() {
             }
 
             let io = TokioIo::new(stream);
+
             hyper_util::server::conn::auto::Builder::new(TokioExecutor::new()).serve_connection(
               io,
               service_fn(|req: hyper::Request<Incoming>| async move {

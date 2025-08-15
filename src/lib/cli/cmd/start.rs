@@ -5,7 +5,6 @@ use rustls::{
   sign::CertifiedKey,
   version::{TLS12, TLS13},
 };
-use std::future::Future;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -25,11 +24,7 @@ use crate::{
     Config, HttpApp, HttpHandle, StreamHandle,
   },
   net::bind,
-  proxy::{
-    self,
-    health::{stream_upstream_healthcheck_task, upstream_healthcheck_task},
-    service::ProxyStreamService,
-  },
+  proxy::health::{stream_upstream_healthcheck_task, upstream_healthcheck_task},
   proxy_protocol::ExpectProxyProtocol,
   serve::{serve_h3_quinn, serve_http, serve_https, serve_ssl, serve_tcp},
   tls::{cert_resolver::CertResolver, crypto, load_certs, load_private_key},
@@ -101,6 +96,8 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
 
   let result: Result<(), anyhow::Error>;
 
+  let mut cancel = CancellationToken::new();
+
   #[cfg(unix)]
   {
     use tokio::signal::unix::{signal, SignalKind};
@@ -115,22 +112,8 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
     let mut sigusr1 =
       signal(SignalKind::user_defined1()).context("failed to setup the SIGUSR1 signal")?;
 
-    // this is the current instance abort signal and abort controller
-    let (mut abort, abort_recv) = tokio::sync::oneshot::channel::<()>();
-
-    // this is the current serve handle
-    let signal = async move {
-      match abort_recv.await {
-        Ok(_) => {}
-        Err(_) => {
-          // if channel is closed we do not send the shutdown signal
-          futures_util::future::pending::<()>().await;
-        }
-      };
-    };
-
     'start: {
-      let mut handle = match instance(args.clone(), signal).await {
+      let mut handle = match instance(args.clone(), cancel.clone()).await {
         Ok(handle) => handle,
         Err(e) => {
           result = Err(e);
@@ -154,8 +137,8 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
             #[cfg(feature = "proctitle")]
             crate::proctitle::set_proctitle(PROCTITLE_SHUTDOWN);
 
-            // send the abort signal to the current instance
-            let _ = abort.send(());
+            // cancel the current instance
+            cancel.cancel();
 
             // while we are shutting down, we continue listening for SIGTERM signal to abruptly shutdown
             tokio::select! {
@@ -175,12 +158,9 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
           // on SIGUSR1 we launch a new instance, once the new instance is correctly started, we signal the old instance to gracefully shutdown
           _ = sigusr1.recv() => {
             log::info!("received SIGUSR1, starting configuration upgrade");
-            let (new_abort, new_abort_recv) = tokio::sync::oneshot::channel::<()>();
-            let new_signal = async move {
-              let _ = new_abort_recv.await;
-            };
+            let new_cancel = CancellationToken::new();
 
-            let new_handle = match instance(args.clone(), new_signal).await {
+            let new_handle = match instance(args.clone(), new_cancel.clone()).await {
               Ok(handle) => handle,
               Err(e) => {
                 // if the new instance fails, we do not signal the old instance to gracefully shutdown
@@ -192,10 +172,10 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
             log::info!("new instance started, starting graceful shutdown of previous instance");
 
             // send the abort signal to the old instance
-            let _ = abort.send(());
+            let _ = cancel.cancel();
 
             // override the abort signal and handle of the old instance with the new ones
-            abort = new_abort;
+            cancel = new_cancel;
             handle = new_handle;
 
             continue;
@@ -213,16 +193,7 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
   {
     result = 'result: {
       // TODO: see tokio::signal::windows
-      let (abort_send, abort_recv) = tokio::sync::oneshot::channel::<()>();
-
-      let abort_signal = async move {
-        match abort_recv.await {
-          Ok(_) => {}
-          Err(_) => futures_util::future::pending().await,
-        }
-      };
-
-      let mut handle = match instance(args.clone(), abort_signal).await {
+      let mut handle = match instance(args.clone(), cancel.clone()).await {
         Ok(handle) => handle,
         Err(e) => break 'result Err(e),
       };
@@ -235,7 +206,7 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
           #[cfg(feature = "proctitle")]
           crate::proctitle::set_proctitle(PROCTITLE_SHUTDOWN);
           log::info!("received Ctrl+C, starting graceful shutdown");
-          let _ = abort_send.send(());
+          cancel.cancel();
 
           tokio::select! {
             _ = ctrl_c.recv() => {
@@ -262,14 +233,14 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
 
 /// launch a proxide instance from cli [args::Start]. \
 /// this function will read the config file given in [args::Start] and call [instance_from_config] with the parsed config. \just
-pub async fn instance<F: Future<Output = ()> + Send + 'static>(
+pub async fn instance(
   args: args::Start,
-  abort: F,
+  cancel: CancellationToken,
 ) -> Result<JoinHandle<Result<(), anyhow::Error>>, anyhow::Error> {
   let config = config::load(&args.config)
     .with_context(|| format!("error loading config file from {}", args.config))?;
 
-  instance_from_config(args, config, abort).await
+  instance_from_config(args, config, cancel).await
 }
 
 ///  launch a proxide instance from cli [args::Start] and a parsed [Config]. \
@@ -278,10 +249,10 @@ pub async fn instance<F: Future<Output = ()> + Send + 'static>(
 ///  it will also start the healthcheck task for each upstream. \
 ///  once this function returns Ok, the previous instance can be gracefully shutdown. \
 ///  it receives an abort Future than will start the graceful shutdown process when resolved. \  
-pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
+pub async fn instance_from_config(
   args: args::Start,
   config: Config,
-  abort: F,
+  cancel: CancellationToken,
 ) -> Result<JoinHandle<Result<(), anyhow::Error>>, anyhow::Error> {
   let config = Arc::new(config);
 
@@ -360,7 +331,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
     }
   }
 
-  // ensure pidfile direcytory exists
+  // ensure pidfile directory exists
   if let Some(pidfile) = &config.pidfile {
     let mut piddir = std::path::PathBuf::from(pidfile);
     piddir.pop();
@@ -368,17 +339,12 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
       .with_context(|| format!("error creating pidfile directory at {}", piddir.display()))?;
   };
 
-  // this is the global cancel token for this instance
-  // calling cancel on this token will gracefully shutdown the instance
-  let cancel_token = CancellationToken::new();
-
   // the caller can signal the instance to gracefully shutdown
   tokio::spawn({
-    let cancel_token = cancel_token.clone();
+    let cancelled = cancel.clone().cancelled_owned();
     async move {
-      abort.await;
+      cancelled.await;
       log::info!("received instance abort, starting graceful shutdown");
-      cancel_token.cancel();
     }
   });
 
@@ -652,24 +618,24 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // bind to al http addresss
   for (local_addr, expect_proxy_protocol) in http_bind {
+    let config = config.clone();
+    let cancel = cancel.clone();
+
     log::info!("binding in http mode at {local_addr}");
     let tcp = bind(local_addr)
       .with_context(|| format!("error binding in http mode at addr {local_addr}"))?;
 
-    let make_service = proxy::service::HttpMakeService::new(config.clone());
-
     let handle = tokio::spawn({
-      let signal = cancel_token.clone().cancelled_owned();
       let mut wait_start = start.subscribe();
       async move {
         if let Ok(()) = wait_start.changed().await {
           log::info!("starting http server at {}", local_addr);
 
           serve_http(
+            config,
             local_addr,
             tcp,
-            make_service,
-            signal,
+            cancel,
             http_server_read_timeout,
             http_server_write_timeout,
             http_graceful_shutdown_timeout,
@@ -687,7 +653,11 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // bind to all https addresses
   for (local_addr, (expect_proxy_protocol, sni)) in https_bind {
+    let config = config.clone();
+    let cancel = cancel.clone();
+
     log::info!("binding in https mode at {local_addr}");
+
     let tcp = bind(local_addr)
       .with_context(|| format!("error binding in https mode at addr {local_addr}"))?;
 
@@ -712,20 +682,17 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
     let server_config = Arc::new(server_config);
 
-    let make_service = proxy::service::HttpMakeService::new(config.clone());
-
     let handle = tokio::spawn({
-      let signal = cancel_token.clone().cancelled_owned();
       let mut wait_start = start.subscribe();
       async move {
         if let Ok(()) = wait_start.changed().await {
           log::info!("starting https server at {}", local_addr);
           serve_https(
+            config,
             local_addr,
             tcp,
             server_config,
-            make_service,
-            signal,
+            cancel,
             http_server_read_timeout,
             http_server_write_timeout,
             http_graceful_shutdown_timeout,
@@ -742,6 +709,9 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
   }
 
   for (local_addr, sni) in h3_bind {
+    let config = config.clone();
+    let cancel = cancel.clone();
+
     log::info!("binding in h3 mode at {local_addr}");
 
     let mut cert_resolver = CertResolver::new();
@@ -766,12 +736,11 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
     let server_config = Arc::new(server_config);
 
-    let signal = cancel_token.clone().cancelled_owned();
     let task = serve_h3_quinn(
       local_addr,
-      config.clone(),
+      config,
       server_config,
-      signal,
+      cancel,
       // read_timeout,
       // write_timeout,
       http_graceful_shutdown_timeout,
@@ -794,24 +763,24 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // bind to all stream plain addresses
   for (addr, expect_proxy_protocol) in stream_tcp_bind {
+    let config = config.clone();
+    let cancel = cancel.clone();
+
     log::info!("binding in stream tcp mode at {addr}");
     let tcp =
       bind(addr).with_context(|| format!("error binding in stream tcp mode at addr {addr}"))?;
 
-    let service = ProxyStreamService::new(config.clone());
-
     let handle = tokio::spawn({
-      let signal = cancel_token.clone().cancelled_owned();
       let mut wait_start = start.subscribe();
       async move {
         if let Ok(()) = wait_start.changed().await {
           log::info!("starting stream tcp server at {}", addr);
           serve_tcp(
+            config,
             addr,
             tcp,
             expect_proxy_protocol,
-            service,
-            signal,
+            cancel,
             stream_graceful_shutdown_timeout,
             http_proxy_protocol_read_timeout,
           )
@@ -826,6 +795,9 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
   // bind to all stream ssl addresses
   for (addr, (cert_chain, key_der, expect_proxy_protocol)) in stream_ssl_bind {
+    let config = config.clone();
+    let cancel = cancel.clone();
+
     let crypto_provider = Arc::new(crypto::default_provider());
 
     let server_config = rustls::ServerConfig::builder_with_provider(crypto_provider)
@@ -841,21 +813,18 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
     let tcp =
       bind(addr).with_context(|| format!("error binding in stream ssl mode at addr {addr}"))?;
 
-    let service = ProxyStreamService::new(config.clone());
-
     let task = {
-      let signal = cancel_token.clone().cancelled_owned();
       let mut wait_start = start.subscribe();
       async move {
         if let Ok(()) = wait_start.changed().await {
           log::info!("starting stream ssl server at {}", addr);
           serve_ssl(
+            config,
             addr,
             tcp,
             expect_proxy_protocol,
             server_config,
-            service,
-            signal,
+            cancel,
             stream_graceful_shutdown_timeout,
             stream_proxy_protocol_read_timeout,
           )
@@ -878,7 +847,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
       config: &Config,
       app: &HttpApp,
       handle: &HttpHandle,
-      cancel_token: &CancellationToken,
+      cancel: CancellationToken,
     ) -> Result<(), anyhow::Error> {
       match handle {
         HttpHandle::Return { .. } => {}
@@ -892,6 +861,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           ..
         } => {
           for upstream in upstream.iter() {
+            let cancel = cancel.clone();
             let key = Key::from_config(config, app, upstream).with_context(|| {
               format!(
                 "error creating healthcheck key from config for {}",
@@ -911,7 +881,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
             tokio::spawn({
               let upstream_health = upstream.state_health.clone();
-              let cancelled = cancel_token.clone().cancelled_owned();
+              let cancelled = cancel.cancelled_owned();
               async move {
                 tokio::select! {
                   _ = cancelled => log::info!("received shutdown signal, stopping upstream healthcheck task for {key}"),
@@ -924,7 +894,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
 
         HttpHandle::When(matchers) => {
           for matcher in matchers {
-            start_handle_heath(config, app, &matcher.handle, cancel_token)?;
+            start_handle_heath(config, app, &matcher.handle, cancel.clone())?;
           }
         }
       }
@@ -932,10 +902,11 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
       Ok(())
     }
 
-    start_handle_heath(&config, app, &app.handle, &cancel_token)?;
+    start_handle_heath(&config, app, &app.handle, cancel.clone())?;
   }
 
   for app in &config.stream.apps {
+    let cancel = cancel.clone();
     match &app.handle {
       StreamHandle::Proxy {
         healthcheck: handle_healthcheck,
@@ -1000,7 +971,6 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           );
 
           let upstream_health = upstream.state_health.clone();
-          let cancelled = cancel_token.clone().cancelled_owned();
 
           let sni = upstream.sni.clone();
           let send_proxy_protocol = upstream.send_proxy_protocol;
@@ -1009,6 +979,7 @@ pub async fn instance_from_config<F: Future<Output = ()> + Send + 'static>(
           let url = upstream.origin.clone();
 
           tokio::spawn({
+            let cancelled = cancel.clone().cancelled_owned();
             async move {
               tokio::select! {
                 _ = cancelled => log::info!("received shutdown signal, stopping stream upstream healthcheck task for {url}"),

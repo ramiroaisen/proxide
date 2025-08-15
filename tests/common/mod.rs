@@ -175,7 +175,7 @@ macro_rules! launch {
   };
 
   ($name:ident, $path:literal) => {
-    $crate::launch!($name, $path, futures_util::future::pending());
+    $crate::launch!($name, $path, tokio_util::sync::CancellationToken::new());
   };
 
   ($path:literal, $abort:expr) => {
@@ -183,7 +183,7 @@ macro_rules! launch {
   };
 
   ($path:literal) => {
-    $crate::launch!(_handle, $path, futures_util::future::pending());
+    $crate::launch!(_handle, $path, tokio_util::sync::CancellationToken::new());
   };
 
   (@parsed $name:ident, $config:expr, $abort:expr) => {
@@ -203,11 +203,11 @@ macro_rules! launch {
   };
 
   (@parsed $name:ident, $config:expr) => {
-    $crate::launch!(@parsed $name, $config, futures_util::future::pending());
+    $crate::launch!(@parsed $name, $config, tokio_util::sync::CancellationToken::new());
   };
 
   (@parsed $config:expr) => {
-    $crate::launch!(@parsed _handle, $config, futures_util::future::pending());
+    $crate::launch!(@parsed _handle, $config, tokio_util::sync::CancellationToken::new());
   };
 }
 
