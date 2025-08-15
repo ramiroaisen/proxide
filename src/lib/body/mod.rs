@@ -2,7 +2,6 @@
 pub mod h3;
 
 use crate::channel::spsc;
-#[cfg(feature = "h3-quinn")]
 use bytes::Bytes;
 use futures::Stream;
 use http_body::Frame;
@@ -30,6 +29,7 @@ pub enum BodyKind {
     #[pin]
     crate::body::h3::quinn::Incoming<::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>,
   ),
+  #[cfg(feature = "h3-quinn")]
   IncomingHttp3QuinnServer(
     #[pin]
     crate::body::h3::quinn::Incoming<::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>>,
@@ -205,6 +205,7 @@ impl BodyKind {
     Self::Incoming(incoming)
   }
 
+  #[cfg(feature = "h3-quinn")]
   pub fn incoming_http3_quinn_client(
     incoming: crate::body::h3::quinn::Incoming<
       ::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
@@ -213,6 +214,7 @@ impl BodyKind {
     Self::IncomingHttp3QuinnClient(incoming)
   }
 
+  #[cfg(feature = "h3-quinn")]
   pub fn incoming_http3_quinn_server(
     incoming: crate::body::h3::quinn::Incoming<
       ::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>,
@@ -338,6 +340,8 @@ impl Stream for BodyKind {
           _ => (0, None),
         }
       }
+
+      #[cfg(feature = "h3-quinn")]
       BodyKind::IncomingHttp3QuinnClient(incoming) => {
         // size hint of body is in bytes but size hint of stream is in items
         let hint = incoming.size_hint();
@@ -346,6 +350,8 @@ impl Stream for BodyKind {
           _ => (0, None),
         }
       }
+
+      #[cfg(feature = "h3-quinn")]
       BodyKind::IncomingHttp3QuinnServer(incoming) => {
         // size hint of body is in bytes but size hint of stream is in items
         let hint = incoming.size_hint();

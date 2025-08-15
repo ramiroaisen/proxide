@@ -20,6 +20,15 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tokio_util::{sync::CancellationToken, time::FutureExt};
 
+use crate::config::Config;
+use crate::{
+  body::map_request_body,
+  graceful::GracefulGuard,
+  net::timeout::TimeoutIo,
+  proxy::service::{serve_proxy, serve_stream_proxy, HttpBindKind},
+  proxy_protocol::{ExpectProxyProtocol, ProxyHeader},
+};
+
 fn service_fn<F, Fut>(f: F) -> ServiceFn<F>
 where
   F: FnOnce(Request<Incoming>) -> Fut,
@@ -46,16 +55,6 @@ where
     (self.f.clone())(req)
   }
 }
-
-#[cfg(feature = "h3-quinn")]
-use crate::config::Config;
-use crate::{
-  body::map_request_body,
-  graceful::GracefulGuard,
-  net::timeout::TimeoutIo,
-  proxy::service::{serve_proxy, serve_stream_proxy, HttpBindKind},
-  proxy_protocol::{ExpectProxyProtocol, ProxyHeader},
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ConnectionKind {
@@ -177,8 +176,11 @@ pub fn log_ip_connections() {
     }
   }
 
+  #[cfg(not(feature = "h3-quinn"))]
+  let total_h3 = "N/A";
+
   log::info!(
-    "= server connections - https: {} -  http: {} - h3: {} - ssl: {} - tcp: {} | total: {} =",
+    "= server connections - https: {} -  http: {} - http3: {} - ssl: {} - tcp: {} | total: {} =",
     total_https,
     total_http,
     total_h3,

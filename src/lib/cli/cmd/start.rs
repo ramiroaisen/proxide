@@ -26,9 +26,12 @@ use crate::{
   net::bind,
   proxy::health::{stream_upstream_healthcheck_task, upstream_healthcheck_task},
   proxy_protocol::ExpectProxyProtocol,
-  serve::{serve_h3_quinn, serve_http, serve_https, serve_ssl, serve_tcp},
+  serve::{serve_http, serve_https, serve_ssl, serve_tcp},
   tls::{cert_resolver::CertResolver, crypto, load_certs, load_private_key},
 };
+
+#[cfg(feature = "h3-quinn")]
+use crate::serve::serve_h3_quinn;
 
 #[cfg(feature = "proctitle")]
 crate::group!(
@@ -353,6 +356,7 @@ pub async fn instance_from_config(
    * <BindAddress => [SNIHost => CertifiedKey][]>
    * The combination if BindAddress and SNI is unique and points to the correct certificate to be used
    */
+  #[cfg(feature = "h3-quinn")]
   let mut h3_bind = IndexMap::<SocketAddr, IndexMap<ServerName, Arc<CertifiedKey>>>::new();
 
   /*
@@ -418,6 +422,7 @@ pub async fn instance_from_config(
           }
 
           Some(ssl) => {
+            #[cfg(feature = "h3-quinn")]
             if ssl.h3 == Some(true) {
               let iter = match app.server_names.as_ref() {
                 Some(list) => list.as_slice(),
@@ -453,61 +458,64 @@ pub async fn instance_from_config(
                   }
                 }
               }
-            } else {
-              if http_bind.contains_key(&addr) {
-                anyhow::bail!(
-                  "https and http cannot bind to same port at {} in config file",
-                  addr,
-                );
-              }
 
-              match https_bind.get(&addr) {
-                None => {}
-                Some((expect_proxy_protocol, _)) => {
-                  if *expect_proxy_protocol != listen.expect_proxy_protocol {
-                    anyhow::bail!(
-                      "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
-                      addr,
-                    );
-                  }
+              continue;
+            }
+
+            // no h3
+            if http_bind.contains_key(&addr) {
+              anyhow::bail!(
+                "https and http cannot bind to same port at {} in config file",
+                addr,
+              );
+            }
+
+            match https_bind.get(&addr) {
+              None => {}
+              Some((expect_proxy_protocol, _)) => {
+                if *expect_proxy_protocol != listen.expect_proxy_protocol {
+                  anyhow::bail!(
+                    "expect_proxy_protocol must be the same for listen configs that share the address at {} in config file", 
+                    addr,
+                  );
                 }
               }
+            }
 
-              let iter = match app.server_names.as_ref() {
-                Some(list) => list.as_slice(),
-                None => &[ServerName::All],
-              };
+            let iter = match app.server_names.as_ref() {
+              Some(list) => list.as_slice(),
+              None => &[ServerName::All],
+            };
 
-              for server_name in iter {
-                let https_hosts = &mut https_bind
-                  .entry(addr)
-                  .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))
-                  .1;
+            for server_name in iter {
+              let https_hosts = &mut https_bind
+                .entry(addr)
+                .or_insert_with(|| (listen.expect_proxy_protocol, IndexMap::new()))
+                .1;
 
-                match https_hosts.entry(server_name.clone()) {
-                  Entry::Occupied(_) => {
-                    anyhow::bail!(
-                      "duplicate listen address + server name in config file at address: {} server name: {}",
-                      addr,
-                      server_name
-                    );
-                  }
+              match https_hosts.entry(server_name.clone()) {
+                Entry::Occupied(_) => {
+                  anyhow::bail!(
+                    "duplicate listen address + server name in config file at address: {} server name: {}",
+                    addr,
+                    server_name
+                  );
+                }
 
-                  Entry::Vacant(entry) => {
-                    let certs_der = load_certs(&ssl.cert)
-                      .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
+                Entry::Vacant(entry) => {
+                  let certs_der = load_certs(&ssl.cert)
+                    .with_context(|| format!("error loading ssl certificate at {}", ssl.cert))?;
 
-                    let key_der = load_private_key(&ssl.key)
-                      .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
+                  let key_der = load_private_key(&ssl.key)
+                    .with_context(|| format!("error loading ssl private key at {}", ssl.key))?;
 
-                    let signing_key = crypto::sign::any_supported_type(&key_der)
-                      .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
+                  let signing_key = crypto::sign::any_supported_type(&key_der)
+                    .with_context(|| format!("crypto error at certificate key {}", ssl.key))?;
 
-                    let certified_key =
-                      Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
+                  let certified_key =
+                    Arc::new(rustls::sign::CertifiedKey::new(certs_der, signing_key));
 
-                    entry.insert(certified_key);
-                  }
+                  entry.insert(certified_key);
                 }
               }
             }
@@ -708,6 +716,7 @@ pub async fn instance_from_config(
     handles.push(handle);
   }
 
+  #[cfg(feature = "h3-quinn")]
   for (local_addr, sni) in h3_bind {
     let config = config.clone();
     let cancel = cancel.clone();
@@ -1114,7 +1123,7 @@ pub async fn instance_from_config(
     let state = config.clone();
 
     tokio::spawn({
-      let cancel = cancel_token.clone().cancelled_owned();
+      let cancelled = cancel.clone().cancelled_owned();
       async move {
         let task = async move {
           loop {
@@ -1131,7 +1140,7 @@ pub async fn instance_from_config(
         };
 
         tokio::select! {
-          _ = cancel => {}
+          _ = cancelled => {}
           _ = task => {}
         }
       }

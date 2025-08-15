@@ -1,5 +1,6 @@
-use futures::future::poll_fn;
+#[cfg(feature = "h3-quinn")]
 use h3::ConnectionState;
+
 use http::{StatusCode};
 use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
@@ -13,7 +14,6 @@ use rustls::pki_types;
 use tokio::io::AsyncWriteExt;
 use tokio_util::time::FutureExt;
 use url::Host;
-use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{
@@ -53,6 +53,7 @@ type SenderMap = HashMap<Key, Arc<Mutex<SenderDeque>>>;
 
 type Http1SendRequest = conn::http1::SendRequest<Body>;
 type Http2SendRequest = conn::http2::SendRequest<Body>;
+#[cfg(feature = "h3-quinn")]
 type Http3SendRequest = h3::client::SendRequest<h3_quinn::OpenStreams, bytes::Bytes>;
 
 static CONNECTION_UID: AtomicUsize = AtomicUsize::new(0);
@@ -62,6 +63,7 @@ pub enum Version {
   Http10,
   Http11,
   Http2,
+  #[cfg(feature = "h3-quinn")]
   Http3,
 }
 
@@ -71,6 +73,7 @@ impl From<UpstreamVersion> for Version {
       UpstreamVersion::Http10 => Version::Http10,
       UpstreamVersion::Http11 => Version::Http11,
       UpstreamVersion::Http2 => Version::Http2,
+      #[cfg(feature = "h3-quinn")]
       UpstreamVersion::Http3 => Version::Http3,
     }
   }
@@ -234,6 +237,7 @@ pub enum ReadyError {
 pub enum SendRequest {
   Http1(Http1SendRequest),
   Http2(Http2SendRequest),
+  #[cfg(feature = "h3-quinn")]
   Http3(
     #[debug(ignore)]
     Http3SendRequest
@@ -245,6 +249,7 @@ impl SendRequest {
     match self {
       SendRequest::Http1(send) => Some(send.is_ready()),
       SendRequest::Http2(send) => Some(send.is_ready()),
+      #[cfg(feature = "h3-quinn")]
       SendRequest::Http3(_) => None,
     }
   }
@@ -253,6 +258,7 @@ impl SendRequest {
     match self {
       SendRequest::Http1(send) => Some(send.is_closed()),
       SendRequest::Http2(send) => Some(send.is_closed()),
+      #[cfg(feature = "h3-quinn")]
       SendRequest::Http3(send) => Some(send.is_closing()),
     }
   }
@@ -261,6 +267,7 @@ impl SendRequest {
     match self {
       SendRequest::Http1(send) => send.ready().await.map_err(ReadyError::Http1),
       SendRequest::Http2(send) => send.ready().await.map_err(ReadyError::Http2),
+      #[cfg(feature = "h3-quinn")]
       SendRequest::Http3(send) => match send.is_closing() {
         true => Err(ReadyError::Http3),
         false => Ok(()),
@@ -388,6 +395,7 @@ impl Sender {
               Ok(sender)
             }
 
+            #[cfg(feature = "h3-quinn")]
             Version::Http3 => {
               unreachable!()
             }
@@ -446,6 +454,7 @@ impl Sender {
               (false, Version::Http10) => tls_config!(b"http/1.0"),
               (false, Version::Http11) => tls_config!(b"http/1.1"),
               (false, Version::Http2) => tls_config!(b"h2"),
+              #[cfg(feature = "h3-quinn")]
               (_, Version::Http3) => unreachable!(),
             };
 
@@ -512,6 +521,7 @@ impl Sender {
                 Ok(sender)
               }
 
+              #[cfg(feature = "h3-quinn")]
               Version::Http3 => {
                 unreachable!()
               }
@@ -520,6 +530,7 @@ impl Sender {
         }
       }
     
+      #[cfg(feature = "h3-quinn")]
       Version::Http3 => {
         match key.protocol {
           Protocol::Http => {
@@ -585,8 +596,8 @@ impl Sender {
             client_endpoint.set_default_client_config(client_config);
 
             let addr = match &key.host {
-              Host::Ipv4(ipv4) => SocketAddr::from((*ipv4, key.port)),
-              Host::Ipv6(ipv6) => SocketAddr::from((*ipv6, key.port)),
+              Host::Ipv4(ipv4) => std::net::SocketAddr::from((*ipv4, key.port)),
+              Host::Ipv6(ipv6) => std::net::SocketAddr::from((*ipv6, key.port)),
               Host::Domain(domain) => {
                 // TODO: implement another DNS resolution that doesn't use a threadpool
                 tokio::net::lookup_host(&domain)  
@@ -617,7 +628,7 @@ impl Sender {
 
             tokio::spawn(async move {
               // drive the connection to termination
-              poll_fn(|cx| driver.poll_close(cx)).await;
+              futures::future::poll_fn(|cx| driver.poll_close(cx)).await;
             });
 
             let sender = Sender {
@@ -773,6 +784,7 @@ impl Pool {
       hyper::Version::HTTP_10 => Version::Http10,
       hyper::Version::HTTP_11 => Version::Http11,
       hyper::Version::HTTP_2 => Version::Http2,
+      #[cfg(feature = "h3-quinn")]
       hyper::Version::HTTP_3 => Version::Http3,
       _ => return Err(ClientError::InvalidVersion(request.version())),
     };
@@ -1213,6 +1225,7 @@ impl ClientError {
       ClientError::SendRequest(_) => ClientErrorKind::SendRequest,
       #[cfg(feature = "h3-quinn")]
       ClientError::Http3QuinnSendRequest(_) => ClientErrorKind::Http3QuinnSendRequest,
+      #[cfg(feature = "h3-quinn")]
       ClientError::Http3QuinnRecvResponse(_) => ClientErrorKind::Http3QuinnRecvResponse,
     }
   }
@@ -1262,26 +1275,41 @@ pub enum ConnectError {
   #[cfg(feature = "h3-quinn")]
   #[error("http3 scheme is not https")]
   Http3SchemeNotHttps,
+
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 connect quinn error: local bind error: {0}")]
   Http3QuinnLocalBind(#[source] std::io::Error),
+  
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 connect quinn error: client config error: {0}")]
   Http3QuinnClientConfig(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
+  
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 dns resolve error for {host} - {source}")]
   Http3DnsResolve {
     host: String,
     #[source]
     source: std::io::Error,
   },
+  
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 dns resolve error for {host} - empty list")]
   Http3DnsResolveEmpty {
     host: String,
   },
+  
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 connect quinn error: {0}")]
   Http3QuinnConnect(#[source] quinn::ConnectError),
+
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 connect2 quinn error: {0}")]
   Http3QuinnConnect2(#[source] quinn::ConnectionError),
+
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 h3 client new error: {0}")]
   Http3ClientNew(#[source] h3::error::ConnectionError),
+
   #[error("tcp connect error: {0}")]
   TcpConnect(#[source] std::io::Error),
   #[error("tcp handshake error: {0}")]

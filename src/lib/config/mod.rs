@@ -1060,6 +1060,7 @@ pub enum UpstreamVersion {
   Http11,
   #[serde(rename = "http/2")]
   Http2,
+  #[cfg(feature = "h3-quinn")]
   #[serde(rename = "http/3")]
   Http3,
 }
@@ -1077,6 +1078,7 @@ impl FromStr for UpstreamVersion {
       "http/1.0" => Ok(UpstreamVersion::Http10),
       "http/1.1" => Ok(UpstreamVersion::Http11),
       "http/2" => Ok(UpstreamVersion::Http2),
+      #[cfg(feature = "h3-quinn")]
       "http/3" => Ok(UpstreamVersion::Http3),
       _ => Err(InvalidVersionError(s.to_string())),
     }
@@ -1089,6 +1091,7 @@ impl From<UpstreamVersion> for hyper::Version {
       UpstreamVersion::Http10 => hyper::Version::HTTP_10,
       UpstreamVersion::Http11 => hyper::Version::HTTP_11,
       UpstreamVersion::Http2 => hyper::Version::HTTP_2,
+      #[cfg(feature = "h3-quinn")]
       UpstreamVersion::Http3 => hyper::Version::HTTP_3,
     }
   }

@@ -19,6 +19,7 @@ pub enum ProxyHttpError {
   #[error("hyper server error: {0}")]
   IncomingBody(#[source] hyper::Error),
 
+  #[cfg(feature = "h3-quinn")]
   #[error("h3 quinn incoming body error: {0}")]
   Http3QuinnIncomingBody(#[source] crate::body::h3::quinn::Http3BodyError),
 

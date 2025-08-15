@@ -87,9 +87,9 @@ pub fn resolve_upstream_app<'a>(
 
       let listen_bind_kind = match &listen.ssl {
         None => HttpBindKind::Http,
-        Some(ssl) => {
+        Some(_ssl) => {
           #[cfg(feature = "h3-quinn")]
-          if ssl.h3 == Some(true) {
+          if _ssl.h3 == Some(true) {
             HttpBindKind::H3Quinn
           } else {
             HttpBindKind::Https
@@ -206,6 +206,7 @@ pub async fn serve_proxy(
   #[cfg(feature = "interpolation")]
   let request_x_forwarded_port = request.headers().get(X_FORWARDED_PORT).cloned();
 
+  #[allow(unused)]
   let is_ssl = match bind_kind {
     HttpBindKind::Http => false,
     HttpBindKind::Https => true,
