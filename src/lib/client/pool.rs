@@ -228,6 +228,7 @@ pub enum ReadyError {
   Http1(#[source] hyper::Error),
   #[error("http2 ready error: {0}")]
   Http2(#[source] hyper::Error),
+  #[cfg(feature = "h3-quinn")]
   #[error("http3 ready error")]
   Http3,
 }
