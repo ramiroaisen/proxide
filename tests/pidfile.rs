@@ -11,7 +11,7 @@ fn pidfile_new() {
   let pidfile = dir.file("pidfile-new.pid");
   let config_str = include_str!("pidfile.yml").replace("%PIDFILE%", &pidfile);
 
-  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_norway::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
 
@@ -28,7 +28,7 @@ fn pidfile_existing() {
   let config_str = include_str!("pidfile.yml").replace("%PIDFILE%", &pidfile);
 
   std::fs::write(&pidfile, "1234").expect("write pidfile");
-  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_norway::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
 

@@ -14,7 +14,7 @@ fn rotate() {
 
   let config_str = include_str!("log-rotate.yml").replace("%PRIMARY_LOG%", &primary_log);
 
-  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_norway::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
 

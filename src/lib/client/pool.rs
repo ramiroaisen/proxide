@@ -1,5 +1,3 @@
-use futures::future::poll_fn;
-use h3::ConnectionState;
 use http::{StatusCode};
 use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
@@ -13,7 +11,6 @@ use rustls::pki_types;
 use tokio::io::AsyncWriteExt;
 use tokio_util::time::FutureExt;
 use url::Host;
-use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::{
@@ -53,7 +50,6 @@ type SenderMap = HashMap<Key, Arc<Mutex<SenderDeque>>>;
 
 type Http1SendRequest = conn::http1::SendRequest<Body>;
 type Http2SendRequest = conn::http2::SendRequest<Body>;
-type Http3SendRequest = h3::client::SendRequest<h3_quinn::OpenStreams, bytes::Bytes>;
 
 static CONNECTION_UID: AtomicUsize = AtomicUsize::new(0);
 
@@ -62,7 +58,6 @@ pub enum Version {
   Http10,
   Http11,
   Http2,
-  Http3,
 }
 
 impl From<UpstreamVersion> for Version {
@@ -71,7 +66,6 @@ impl From<UpstreamVersion> for Version {
       UpstreamVersion::Http10 => Version::Http10,
       UpstreamVersion::Http11 => Version::Http11,
       UpstreamVersion::Http2 => Version::Http2,
-      UpstreamVersion::Http3 => Version::Http3,
     }
   }
 }
@@ -234,10 +228,6 @@ pub enum ReadyError {
 pub enum SendRequest {
   Http1(Http1SendRequest),
   Http2(Http2SendRequest),
-  Http3(
-    #[debug(ignore)]
-    Http3SendRequest
-  ),
 }
 
 impl SendRequest {
@@ -245,7 +235,6 @@ impl SendRequest {
     match self {
       SendRequest::Http1(send) => Some(send.is_ready()),
       SendRequest::Http2(send) => Some(send.is_ready()),
-      SendRequest::Http3(_) => None,
     }
   }
 
@@ -253,7 +242,6 @@ impl SendRequest {
     match self {
       SendRequest::Http1(send) => Some(send.is_closed()),
       SendRequest::Http2(send) => Some(send.is_closed()),
-      SendRequest::Http3(send) => Some(send.is_closing()),
     }
   }
 
@@ -261,10 +249,6 @@ impl SendRequest {
     match self {
       SendRequest::Http1(send) => send.ready().await.map_err(ReadyError::Http1),
       SendRequest::Http2(send) => send.ready().await.map_err(ReadyError::Http2),
-      SendRequest::Http3(send) => match send.is_closing() {
-        true => Err(ReadyError::Http3),
-        false => Ok(()),
-      }
     }
   }
 }
@@ -387,10 +371,6 @@ impl Sender {
 
               Ok(sender)
             }
-
-            Version::Http3 => {
-              unreachable!()
-            }
           }
         }
 
@@ -446,7 +426,6 @@ impl Sender {
               (false, Version::Http10) => tls_config!(b"http/1.0"),
               (false, Version::Http11) => tls_config!(b"http/1.1"),
               (false, Version::Http2) => tls_config!(b"h2"),
-              (_, Version::Http3) => unreachable!(),
             };
 
             let tls_connector = tokio_rustls::TlsConnector::from(tls_config);
@@ -511,121 +490,7 @@ impl Sender {
 
                 Ok(sender)
               }
-
-              Version::Http3 => {
-                unreachable!()
-              }
             }
-          }
-        }
-      }
-    
-      Version::Http3 => {
-        match key.protocol {
-          Protocol::Http => {
-            Err(ConnectError::Http3SchemeNotHttps)
-          }
-
-          Protocol::Https => {
-            
-            let client_config = match key.danger_accept_invalid_certs {
-              false => {
-                  #[static_init::dynamic]
-                  static CLIENT_CONFIG: quinn::ClientConfig = {
-                    let mut tls_config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
-                      .with_protocol_versions(&[&rustls::version::TLS13])
-                      .expect("cannot build tls client config with tls1.3 protocol")
-                      .with_native_roots()
-                      .expect("cannot build tls client config with native roots")
-                      .with_no_client_auth();
-
-                    tls_config.enable_early_data = true;
-                    tls_config.alpn_protocols = vec![b"h3".to_vec()];
-
-                    let client_config = quinn::ClientConfig::new(Arc::new(
-                      quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
-                        .expect("cannot quinn QuicClientConfig from tls confog")
-                    ));
-
-                    client_config
-                  };
-
-                  // quinn::ClientConfig is a wrapper around some Arcs, is OK to clone
-                  CLIENT_CONFIG.clone()
-                }
-
-              true => {
-                #[static_init::dynamic]
-                static CLIENT_CONFIG: quinn::ClientConfig = {
-                  let mut tls_config: rustls::ClientConfig = rustls::ClientConfig::builder_with_provider(Arc::new(crypto::default_provider()))
-                    .with_protocol_versions(&[&rustls::version::TLS13])
-                    .expect("cannot build tls client config with default protocols")
-                    .dangerous()
-                    .with_custom_certificate_verifier(Arc::new(DangerNoCertVerifier))
-                    .with_no_client_auth();
-
-                  tls_config.enable_early_data = true;
-                  tls_config.alpn_protocols = vec![b"h3".to_vec()];
-
-                  let client_config = quinn::ClientConfig::new(Arc::new(
-                    quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
-                      .expect("cannot quinn QuicClientConfig from tls confog")
-                  ));
-
-                  client_config
-                };
-
-                // quinn::ClientConfig is a wrapper around some Arcs, is OK to clone
-                CLIENT_CONFIG.clone()
-              }
-            };
-
-            let local_addr = std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 0u16));
-            let mut client_endpoint = h3_quinn::quinn::Endpoint::client(local_addr).map_err(ConnectError::Http3QuinnLocalBind)?;
-            client_endpoint.set_default_client_config(client_config);
-
-            let addr = match &key.host {
-              Host::Ipv4(ipv4) => SocketAddr::from((*ipv4, key.port)),
-              Host::Ipv6(ipv6) => SocketAddr::from((*ipv6, key.port)),
-              Host::Domain(domain) => {
-                // TODO: implement another DNS resolution that doesn't use a threadpool
-                tokio::net::lookup_host(&domain)  
-                  .await
-                  .map_err(|e| ConnectError::Http3DnsResolve {
-                    host: domain.clone(),
-                    source: e,
-                  })?
-                  .next()
-                  .ok_or_else(|| ConnectError::Http3DnsResolveEmpty { host: domain.clone() })?
-              }
-            };
-              
-            let server_name = match &key.sni {
-              Some(sni) => sni.to_str().to_string(),
-              None => key.host.to_string(),
-            };
-
-            let conn = client_endpoint.connect(addr, &server_name)
-              .map_err(ConnectError::Http3QuinnConnect)?
-              .await
-              .map_err(ConnectError::Http3QuinnConnect2)?;
-
-            let quinn_conn = h3_quinn::Connection::new(conn);
-            let (mut driver, sender) = h3::client::new(quinn_conn)
-              .await
-              .map_err(ConnectError::Http3ClientNew)?;
-
-            tokio::spawn(async move {
-              // drive the connection to termination
-              poll_fn(|cx| driver.poll_close(cx)).await;
-            });
-
-            let sender = Sender {
-              uid: CONNECTION_UID.fetch_add(1, std::sync::atomic::Ordering::AcqRel),
-              send: SendRequest::Http3(sender),
-            };
-
-            Ok(sender)
           }
         }
       }
@@ -773,7 +638,6 @@ impl Pool {
       hyper::Version::HTTP_10 => Version::Http10,
       hyper::Version::HTTP_11 => Version::Http11,
       hyper::Version::HTTP_2 => Version::Http2,
-      hyper::Version::HTTP_3 => Version::Http3,
       _ => return Err(ClientError::InvalidVersion(request.version())),
     };
 
@@ -934,88 +798,6 @@ impl Pool {
 
             Response::from_parts(parts, Body::from(incoming))
           }
-
-          #[cfg(feature = "h3-quinn")]
-          SendRequest::Http3(mut send) => {
-            // pool.insert(key, Sender {
-            //   send: SendRequest::Http3(send.clone()),
-            //   uid,
-            // });
-
-            // h3 does not support authority and host header to diverge.
-            // If you have an h3 upstream use an alternative host header in configuration like X-Forwarded-Host or X-Host
-            // Note that this will be compared to the SNI host by h3, not to the authority of this request uri
-            request.headers_mut().remove(hyper::header::HOST);
-            
-            let (parts, mut body) = request.into_parts();
-            let request = hyper::Request::from_parts(parts, ());
-            let send2 = send.clone();
-
-            let request_stream = send.send_request(request)
-              .await
-              .map_err(ClientError::Http3QuinnSendRequest)?;
-
-            let (mut send, mut recv) = request_stream.split();
-
-            tokio::spawn(async move {
-              while let Some(frame) = body.frame().await {
-                match frame {
-                  // TODO: allow cancellation
-                  Err(e) => {
-                    log::warn!("error at h3 client request body.frame() - {e}: {e:?}");
-                    return;
-                  }
-                  
-                  Ok(frame) => {
-                    if frame.is_data() {
-                      let data = frame.into_data().unwrap();
-                      match send.send_data(data).await {
-                        Ok(_) => {},
-                        Err(e) => {
-                          log::warn!("error sending h3 data - {e}: {e:?}");
-                          return;
-                        }
-                      }
-                    } else if frame.is_trailers() {
-                      let trailers = frame.into_trailers().unwrap();
-                      match send.send_trailers(trailers).await {
-                        Ok(_) => {},
-                        Err(e) => {
-                          log::warn!("error sending h3 trailers - {e}: {e:?}");
-                          return;
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-
-              match send.finish().await {
-                Ok(_) => {},
-                Err(e) => {
-                  log::warn!("error finishing h3 request - {e}: {e:?}");
-                  return;
-                },
-              }
-            });
-
-            let response = recv.recv_response()
-              .await
-              .map_err(ClientError::Http3QuinnRecvResponse)?;
-
-            let content_length = match response.headers().get(hyper::header::CONTENT_LENGTH) {
-              Some(c) => match c.to_str() {
-                Ok(s) => s.parse::<u64>().ok(),
-                Err(_) => None,
-              },
-              None => None,
-            };
-
-            let mut body: Body = crate::body::h3::quinn::Incoming::new(recv, content_length).into(); 
-            let (parts, ()) = response.into_parts(); 
-            body.on_drop(move || drop(send2));
-            Response::from_parts(parts, body)
-          }
         };
 
         Ok(response)
@@ -1129,14 +911,6 @@ pub enum ClientError {
 
   #[error("error after request sent: {0}")]
   SendRequest(#[source] hyper::Error),
-
-  #[cfg(feature = "h3-quinn")]
-  #[error("http3 error request sent: {0}")]
-  Http3QuinnSendRequest(#[source] h3::error::StreamError),
-
-  #[cfg(feature = "h3-quinn")]
-  #[error("http3 error on recv response: {0}")]
-  Http3QuinnRecvResponse(#[source] h3::error::StreamError),
 }
 
 /**
@@ -1153,10 +927,6 @@ pub enum ClientErrorKind {
   InvalidUriMissingHotAndAuthority,
   Connect,
   SendRequest,
-  #[cfg(feature = "h3-quinn")]
-  Http3QuinnSendRequest,
-  #[cfg(feature = "h3-quinn")]
-  Http3QuinnRecvResponse,
 }
 
 impl ClientErrorKind {
@@ -1171,10 +941,6 @@ impl ClientErrorKind {
       E::InvalidUriMissingHotAndAuthority => ErrorOriginator::Config,
       E::Connect => ErrorOriginator::Upstream,
       E::SendRequest => ErrorOriginator::Upstream,
-      #[cfg(feature = "h3-quinn")]
-      E::Http3QuinnSendRequest => ErrorOriginator::Upstream,
-      #[cfg(feature = "h3-quinn")]
-      E::Http3QuinnRecvResponse => ErrorOriginator::Upstream,
     }
   }
 
@@ -1189,10 +955,6 @@ impl ClientErrorKind {
       E::InvalidUriMissingHotAndAuthority => StatusCode::BAD_REQUEST,
       E::Connect => StatusCode::BAD_GATEWAY,
       E::SendRequest => StatusCode::BAD_GATEWAY,
-      #[cfg(feature = "h3-quinn")]
-      E::Http3QuinnSendRequest => StatusCode::BAD_GATEWAY,
-      #[cfg(feature = "h3-quinn")]
-      E::Http3QuinnRecvResponse => StatusCode::BAD_GATEWAY,
     }
   }
 }
@@ -1211,9 +973,6 @@ impl ClientError {
       ClientError::InvalidUriMissingHotAndAuthority => ClientErrorKind::InvalidUriMissingHotAndAuthority,
       ClientError::Connect { .. } => ClientErrorKind::Connect,
       ClientError::SendRequest(_) => ClientErrorKind::SendRequest,
-      #[cfg(feature = "h3-quinn")]
-      ClientError::Http3QuinnSendRequest(_) => ClientErrorKind::Http3QuinnSendRequest,
-      ClientError::Http3QuinnRecvResponse(_) => ClientErrorKind::Http3QuinnRecvResponse,
     }
   }
 
@@ -1256,32 +1015,8 @@ pub enum ConnectError {
   // HttpsTcpReady(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
   // #[error("https tcp connect error: {0}")]
   // HttpsTcpConnect(#[source] ProxyProtocolConnectorError<<HttpConnector as Service<hyper::http::Uri>>::Error>),
-  #[error("http3 connect error: {0}")]
+  #[error("http ready error: {0}")]
   Ready(#[from] ReadyError),
-
-  #[cfg(feature = "h3-quinn")]
-  #[error("http3 scheme is not https")]
-  Http3SchemeNotHttps,
-  #[error("http3 connect quinn error: local bind error: {0}")]
-  Http3QuinnLocalBind(#[source] std::io::Error),
-  #[error("http3 connect quinn error: client config error: {0}")]
-  Http3QuinnClientConfig(#[from] quinn::crypto::rustls::NoInitialCipherSuite),
-  #[error("http3 dns resolve error for {host} - {source}")]
-  Http3DnsResolve {
-    host: String,
-    #[source]
-    source: std::io::Error,
-  },
-  #[error("http3 dns resolve error for {host} - empty list")]
-  Http3DnsResolveEmpty {
-    host: String,
-  },
-  #[error("http3 connect quinn error: {0}")]
-  Http3QuinnConnect(#[source] quinn::ConnectError),
-  #[error("http3 connect2 quinn error: {0}")]
-  Http3QuinnConnect2(#[source] quinn::ConnectionError),
-  #[error("http3 h3 client new error: {0}")]
-  Http3ClientNew(#[source] h3::error::ConnectionError),
   #[error("tcp connect error: {0}")]
   TcpConnect(#[source] std::io::Error),
   #[error("tcp handshake error: {0}")]

@@ -19,8 +19,6 @@ pub struct Listen {
 pub struct Ssl {
   pub cert: String,
   pub key: String,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub h3: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -135,7 +133,6 @@ mod test {
           ssl: Some(Ssl {
             cert: "cert/self-signed-cert.pem".to_string(),
             key: "cert/self-signed-key.pem".to_string(),
-            h3: None,
           }),
           expect_proxy_protocol: None,
         },
@@ -154,7 +151,6 @@ mod test {
           ssl: Some(Ssl {
             cert: "cert/self-signed-cert.pem".to_string(),
             key: "cert/self-signed-key.pem".to_string(),
-            h3: None,
           }),
           expect_proxy_protocol: Some(ExpectProxyProtocol::V1),
         },

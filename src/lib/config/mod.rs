@@ -1060,8 +1060,6 @@ pub enum UpstreamVersion {
   Http11,
   #[serde(rename = "http/2")]
   Http2,
-  #[serde(rename = "http/3")]
-  Http3,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1077,7 +1075,6 @@ impl FromStr for UpstreamVersion {
       "http/1.0" => Ok(UpstreamVersion::Http10),
       "http/1.1" => Ok(UpstreamVersion::Http11),
       "http/2" => Ok(UpstreamVersion::Http2),
-      "http/3" => Ok(UpstreamVersion::Http3),
       _ => Err(InvalidVersionError(s.to_string())),
     }
   }
@@ -1089,7 +1086,6 @@ impl From<UpstreamVersion> for hyper::Version {
       UpstreamVersion::Http10 => hyper::Version::HTTP_10,
       UpstreamVersion::Http11 => hyper::Version::HTTP_11,
       UpstreamVersion::Http2 => hyper::Version::HTTP_2,
-      UpstreamVersion::Http3 => hyper::Version::HTTP_3,
     }
   }
 }
@@ -1126,7 +1122,7 @@ pub enum LoadConfigError {
   Toml(#[from] toml::de::Error),
 
   #[error("{0}")]
-  Yaml(#[from] serde_yml::Error),
+  Yaml(#[from] serde_norway::Error),
 
   #[error("{0}")]
   Json(#[from] serde_json::Error),
@@ -1205,7 +1201,7 @@ pub fn load(path: &str) -> Result<Config, LoadConfigError> {
 
   let string = std::fs::read_to_string(path)?;
   let config: Config = if path.ends_with(".yml") || path.ends_with(".yaml") {
-    serde_yml::from_str(&string)?
+    serde_norway::from_str(&string)?
   } else if path.ends_with(".json") {
     serde_json::from_str(&string)?
   } else {
@@ -1243,7 +1239,8 @@ pub mod export {
   #[test]
   fn sample_config_is_valid() {
     let config_str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config.sample.yml"));
-    let config: Config = serde_yml::from_str(config_str).expect("error parsing yaml config file");
+    let config: Config =
+      serde_norway::from_str(config_str).expect("error parsing yaml config file");
     validate_config(&config).expect("error validating config");
   }
 

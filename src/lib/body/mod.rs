@@ -1,8 +1,4 @@
-#[cfg(feature = "h3-quinn")]
-pub mod h3;
-
 use crate::channel::spsc;
-#[cfg(feature = "h3-quinn")]
 use bytes::Bytes;
 use futures::Stream;
 use http_body::Frame;
@@ -25,15 +21,6 @@ pub enum BodyKind {
   Empty,
   Full(Option<Bytes>),
   Incoming(#[pin] Incoming),
-  #[cfg(feature = "h3-quinn")]
-  IncomingHttp3QuinnClient(
-    #[pin]
-    crate::body::h3::quinn::Incoming<::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>,
-  ),
-  IncomingHttp3QuinnServer(
-    #[pin]
-    crate::body::h3::quinn::Incoming<::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>>,
-  ),
   Stream(FrameStream),
 }
 
@@ -43,10 +30,6 @@ impl Debug for BodyKind {
       BodyKind::Empty => "BodyKind::Empty",
       BodyKind::Full(_) => "BodyKind::Full",
       BodyKind::Incoming(_) => "BodyKind::Incoming",
-      #[cfg(feature = "h3-quinn")]
-      BodyKind::IncomingHttp3QuinnClient(_) => "BodyKind::IncomingHttpQuinnClient",
-      #[cfg(feature = "h3-quinn")]
-      BodyKind::IncomingHttp3QuinnServer(_) => "BodyKind::IncomingHttpQuinnServer",
       BodyKind::Stream(_) => "BodyKind::Stream",
     };
 
@@ -82,34 +65,6 @@ impl From<Bytes> for Body {
 impl From<Incoming> for Body {
   fn from(incoming: Incoming) -> Self {
     Body::incoming(incoming)
-  }
-}
-
-#[cfg(feature = "h3-quinn")]
-impl
-  From<crate::body::h3::quinn::Incoming<::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>>>
-  for Body
-{
-  fn from(
-    inner: crate::body::h3::quinn::Incoming<
-      ::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
-    >,
-  ) -> Self {
-    Body::incoming_http3_quinn_client(inner)
-  }
-}
-
-#[cfg(feature = "h3-quinn")]
-impl
-  From<crate::body::h3::quinn::Incoming<::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>>>
-  for Body
-{
-  fn from(
-    inner: crate::body::h3::quinn::Incoming<
-      ::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>,
-    >,
-  ) -> Self {
-    Body::incoming_http3_quinn_server(inner)
   }
 }
 
@@ -163,30 +118,6 @@ impl Body {
     (body, sender)
   }
 
-  #[cfg(feature = "h3-quinn")]
-  pub fn incoming_http3_quinn_client(
-    inner: crate::body::h3::quinn::Incoming<
-      ::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
-    >,
-  ) -> Self {
-    Self {
-      kind: BodyKind::incoming_http3_quinn_client(inner),
-      on_drop: vec![],
-    }
-  }
-
-  #[cfg(feature = "h3-quinn")]
-  pub fn incoming_http3_quinn_server(
-    inner: crate::body::h3::quinn::Incoming<
-      ::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>,
-    >,
-  ) -> Self {
-    Self {
-      kind: BodyKind::incoming_http3_quinn_server(inner),
-      on_drop: vec![],
-    }
-  }
-
   pub fn on_drop<F: FnOnce() + Send + Sync + 'static>(&mut self, fun: F) {
     self.on_drop.push(Box::new(fun));
   }
@@ -203,22 +134,6 @@ impl BodyKind {
 
   pub fn incoming(incoming: Incoming) -> Self {
     Self::Incoming(incoming)
-  }
-
-  pub fn incoming_http3_quinn_client(
-    incoming: crate::body::h3::quinn::Incoming<
-      ::h3::client::RequestStream<h3_quinn::RecvStream, Bytes>,
-    >,
-  ) -> Self {
-    Self::IncomingHttp3QuinnClient(incoming)
-  }
-
-  pub fn incoming_http3_quinn_server(
-    incoming: crate::body::h3::quinn::Incoming<
-      ::h3::server::RequestStream<h3_quinn::RecvStream, Bytes>,
-    >,
-  ) -> Self {
-    Self::IncomingHttp3QuinnServer(incoming)
   }
 
   pub fn stream<S: Stream<Item = Result<Frame<Bytes>, ProxyHttpError>> + Send + Sync + 'static>(
@@ -256,30 +171,6 @@ impl HyperBody for BodyKind {
         Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProxyHttpError::IncomingBody(e)))),
       },
 
-      #[cfg(feature = "h3-quinn")]
-      BodyKindProjection::IncomingHttp3QuinnClient(mut incoming) => {
-        match incoming.as_mut().poll_frame(cx) {
-          Poll::Pending => Poll::Pending,
-          Poll::Ready(None) => Poll::Ready(None),
-          Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
-          Poll::Ready(Some(Err(e))) => {
-            Poll::Ready(Some(Err(ProxyHttpError::Http3QuinnIncomingBody(e))))
-          }
-        }
-      }
-
-      #[cfg(feature = "h3-quinn")]
-      BodyKindProjection::IncomingHttp3QuinnServer(mut incoming) => {
-        match incoming.as_mut().poll_frame(cx) {
-          Poll::Pending => Poll::Pending,
-          Poll::Ready(None) => Poll::Ready(None),
-          Poll::Ready(Some(Ok(frame))) => Poll::Ready(Some(Ok(frame))),
-          Poll::Ready(Some(Err(e))) => {
-            Poll::Ready(Some(Err(ProxyHttpError::Http3QuinnIncomingBody(e))))
-          }
-        }
-      }
-
       BodyKindProjection::Stream(stream) => stream.as_mut().poll_next(cx),
     }
   }
@@ -289,10 +180,6 @@ impl HyperBody for BodyKind {
       BodyKind::Empty => true,
       BodyKind::Full(opt) => opt.is_none(),
       BodyKind::Incoming(incoming) => incoming.is_end_stream(),
-      #[cfg(feature = "h3-quinn")]
-      BodyKind::IncomingHttp3QuinnClient(incoming) => incoming.is_end_stream(),
-      #[cfg(feature = "h3-quinn")]
-      BodyKind::IncomingHttp3QuinnServer(incoming) => incoming.is_end_stream(),
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not be trusted to be correct
       BodyKind::Stream(_) => false,
     }
@@ -306,10 +193,6 @@ impl HyperBody for BodyKind {
         Some(data) => SizeHint::with_exact(data.len() as u64),
       },
       BodyKind::Incoming(incoming) => incoming.size_hint(),
-      #[cfg(feature = "h3-quinn")]
-      BodyKind::IncomingHttp3QuinnClient(incoming) => incoming.size_hint(),
-      #[cfg(feature = "h3-quinn")]
-      BodyKind::IncomingHttp3QuinnServer(incoming) => incoming.size_hint(),
       // we could use Stream::size_hint() here but its said in the declaration of the trait that it should not trusted to be correct
       BodyKind::Stream(_) => SizeHint::default(),
     }
@@ -338,22 +221,7 @@ impl Stream for BodyKind {
           _ => (0, None),
         }
       }
-      BodyKind::IncomingHttp3QuinnClient(incoming) => {
-        // size hint of body is in bytes but size hint of stream is in items
-        let hint = incoming.size_hint();
-        match (hint.lower(), hint.upper()) {
-          (0, Some(0)) => (0, Some(0)),
-          _ => (0, None),
-        }
-      }
-      BodyKind::IncomingHttp3QuinnServer(incoming) => {
-        // size hint of body is in bytes but size hint of stream is in items
-        let hint = incoming.size_hint();
-        match (hint.lower(), hint.upper()) {
-          (0, Some(0)) => (0, Some(0)),
-          _ => (0, None),
-        }
-      }
+
       BodyKind::Stream(stream) => stream.size_hint(),
     }
   }

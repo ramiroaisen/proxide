@@ -20,7 +20,7 @@ fn access_client_log() {
 
   eprintln!("Config: {}", config_str);
 
-  let config: Config = serde_yml::from_str(&config_str).expect("error parsing yaml config file");
+  let config: Config = serde_norway::from_str(&config_str).expect("error parsing yaml config file");
 
   launch!(@parsed config);
 

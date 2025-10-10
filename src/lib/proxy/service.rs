@@ -68,8 +68,6 @@ fn increment_open_connections(atomic: Arc<AtomicUsize>) -> impl Drop {
 pub enum HttpBindKind {
   Http,
   Https,
-  #[cfg(feature = "h3-quinn")]
-  H3Quinn,
 }
 
 #[inline(always)]
@@ -87,17 +85,7 @@ pub fn resolve_upstream_app<'a>(
 
       let listen_bind_kind = match &listen.ssl {
         None => HttpBindKind::Http,
-        Some(ssl) => {
-          #[cfg(feature = "h3-quinn")]
-          if ssl.h3 == Some(true) {
-            HttpBindKind::H3Quinn
-          } else {
-            HttpBindKind::Https
-          }
-
-          #[cfg(not(feature = "h3-quinn"))]
-          HttpBindKind::Https
-        }
+        Some(_) => HttpBindKind::Https,
       };
 
       if listen_bind_kind != bind_kind {
@@ -206,11 +194,10 @@ pub async fn serve_proxy(
   #[cfg(feature = "interpolation")]
   let request_x_forwarded_port = request.headers().get(X_FORWARDED_PORT).cloned();
 
+  #[cfg(any(feature = "access-log", feature = "interpolation"))]
   let is_ssl = match bind_kind {
     HttpBindKind::Http => false,
     HttpBindKind::Https => true,
-    #[cfg(feature = "h3-quinn")]
-    HttpBindKind::H3Quinn => true,
   };
 
   #[cfg(feature = "interpolation")]
@@ -502,7 +489,7 @@ pub async fn serve_proxy(
 
         HttpHandle::Stats { response_headers } => {
           let json = serde_json::to_value(config).map_err(ProxyHttpError::StatsSerialize)?;
-          let yaml = serde_yml::to_string(&json).unwrap();
+          let yaml = serde_norway::to_string(&json).unwrap();
           let body = Body::full(yaml);
 
           let mut res = Response::new(body);
@@ -1176,20 +1163,20 @@ pub async fn serve_proxy(
     Err(e) => {
       use crate::log::{access_log, DisplayHeader, DisplayOption, DisplayPort};
       access_log!(
-                "HTTP {remote_addr} => {local_addr} | {method} {scheme}://{host}{port}{path} - {referer} - {user_agent} => {proxied_to} | ERROR {error} - {error:?} - {ms}ms",
-                remote_addr = remote_addr,
-                local_addr = local_addr,
-                method = request_method,
-                scheme = if is_ssl { "https" } else { "http" },
-                host = host,
-                port = DisplayPort(port),
-                path = DisplayOption(request_uri.path_and_query()),
-                referer = DisplayHeader(request_referer.as_ref()),
-                user_agent = DisplayHeader(request_user_agent.as_ref()),
-                proxied_to = proxied_to.as_deref().unwrap_or("None"),
-                error = e,
-                ms = start.elapsed().as_millis()
-            );
+        "HTTP {remote_addr} => {local_addr} | {method} {scheme}://{host}{port}{path} - {referer} - {user_agent} => {proxied_to} | ERROR {error} - {error:?} - {ms}ms",
+        remote_addr = remote_addr,
+        local_addr = local_addr,
+        method = request_method,
+        scheme = if is_ssl { "https" } else { "http" },
+        host = host,
+        port = DisplayPort(port),
+        path = DisplayOption(request_uri.path_and_query()),
+        referer = DisplayHeader(request_referer.as_ref()),
+        user_agent = DisplayHeader(request_user_agent.as_ref()),
+        proxied_to = proxied_to.as_deref().unwrap_or("None"),
+        error = e,
+        ms = start.elapsed().as_millis()
+    );
     }
   }
 

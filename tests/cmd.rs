@@ -41,7 +41,7 @@ fn create_config() {
   proxide::cli::run(args).unwrap();
 
   let config = std::fs::read_to_string(&out).unwrap();
-  let _config: Config = serde_yml::from_str(&config).unwrap();
+  let _config: Config = serde_norway::from_str(&config).unwrap();
 
   let schema = std::fs::read_to_string(dir.file("config.schema.json")).unwrap();
   let _schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
@@ -86,7 +86,7 @@ fn create_config_omit_schema() {
   proxide::cli::run(args).unwrap();
 
   let config = std::fs::read_to_string(&out).unwrap();
-  let _config: Config = serde_yml::from_str(&config).unwrap();
+  let _config: Config = serde_norway::from_str(&config).unwrap();
 
   assert!(std::fs::metadata(dir.file("config.schema.json")).is_err());
 }
