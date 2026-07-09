@@ -12,7 +12,7 @@
 - **HTTP reverse proxy** — HTTP/1.0, HTTP/1.1 and HTTP/2, for both downstream clients and upstream servers, with upstream connection pooling and keep-alive
 - **TCP / TLS stream proxy** — forward raw TCP or TLS connections (databases, mail servers, anything) to TCP or TLS upstreams
 - **TLS termination** — TLS 1.2/1.3 via [rustls](https://github.com/rustls/rustls), with SNI-based certificate selection (exact or regex server names)
-- **Load balancing** — `round-robin` (weighted), `random`, `least-connections`, and `ip-hash` (Ketama consistent hashing), with per-upstream weights
+- **Load balancing** — `round-robin`, `random`, `least-connections`, and `ip-hash` (Ketama consistent hashing); all strategies support per-upstream weights
 - **Health checks & retries** — automatic upstream health tracking, request retries with constant or exponential backoff
 - **Compression** — streaming `zstd`, `brotli`, `gzip`, and `deflate` response compression, negotiated from `Accept-Encoding`
 - **WebSockets** — transparent HTTP upgrade support
@@ -69,7 +69,7 @@ pidfile: run/proxide.pid
 http:
   apps:
     - listen:
-        - addr: 8080   # listen on port 8080, all interfaces, IPv4 + IPv6
+        - addr: 80   # listen on port 80, all interfaces, IPv4 + IPv6
       proxy:
         upstream:
           - base_url: http://127.0.0.1:3000
@@ -83,7 +83,7 @@ proxide start
 
 proxide looks for `config.yml` in the current directory by default; use `-c/--config` to point somewhere else.
 
-Requests to `:8080` are now proxied to `127.0.0.1:3000`.
+Requests to port `80` are now proxied to `127.0.0.1:3000`.
 
 ## Configuration guide
 
@@ -106,8 +106,20 @@ http:
         response_headers:
           - [ location, "https://${host}${request_uri}" ]
 
+    # redirect www.example.com to example.com
+    - server_names: [ www.example.com ]
+      listen:
+        - addr: 443
+          ssl:
+            cert: /etc/letsencrypt/live/example.com/fullchain.pem
+            key: /etc/letsencrypt/live/example.com/privkey.pem
+      return:
+        status: 301
+        response_headers:
+          - [ location, "https://example.com${request_uri}" ]
+
     # main site
-    - server_names: [ example.com, www.example.com ]
+    - server_names: [ example.com ]
       listen:
         - addr: 443
           ssl:
