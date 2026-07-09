@@ -976,6 +976,7 @@ pub async fn instance_from_config(
               proxy_tcp_nodelay: _,
               healthcheck: _,
               state_round_robin_index: _,
+              proxy_connection_idle_timeout: _,
             } => {
               for up in upstream {
                 use itertools::Itertools;
