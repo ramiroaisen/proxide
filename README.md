@@ -111,8 +111,8 @@ http:
       listen:
         - addr: 443
           ssl:
-            cert: /etc/letsencrypt/live/example.com/fullchain.pem
-            key: /etc/letsencrypt/live/example.com/privkey.pem
+            cert: /root/proxide/cert/example.com/fullchain.pem
+            key: /root/proxide/cert/example.com/privkey.pem
       return:
         status: 301
         response_headers:
@@ -123,8 +123,8 @@ http:
       listen:
         - addr: 443
           ssl:
-            cert: /etc/letsencrypt/live/example.com/fullchain.pem
-            key: /etc/letsencrypt/live/example.com/privkey.pem
+            cert: /root/proxide/cert/example.com/fullchain.pem
+            key: /root/proxide/cert/example.com/privkey.pem
       proxy:
         upstream:
           - base_url: http://127.0.0.1:3000
@@ -165,9 +165,9 @@ proxy:
 - server_names: [ static.example.com ]
   listen:
     - addr: 443
-      ssl: { cert: /path/fullchain.pem, key: /path/privkey.pem }
+      ssl: { cert: /root/proxide/cert/fullchain.pem, key: /root/proxide/cert/privkey.pem }
   static:
-    base_dir: /var/www/static
+    base_dir: /root/proxide/static
     index_files: [ index.html ]
     dot_files: ignore          # how to treat dotfiles
     follow_symlinks: false
@@ -185,7 +185,7 @@ Routing rules are written in a small request-matching DSL that lives right in th
 - server_names: [ example.com ]
   listen:
     - addr: 443
-      ssl: { cert: /path/fullchain.pem, key: /path/privkey.pem }
+      ssl: { cert: /root/proxide/cert/fullchain.pem, key: /root/proxide/cert/privkey.pem }
   when:
     # api goes to the backend
     - match:
@@ -208,7 +208,7 @@ Routing rules are written in a small request-matching DSL that lives right in th
     # everything else is static
     - match: all
       static:
-        base_dir: /var/www/site
+        base_dir: /root/proxide/site
         index_files: [ index.html ]
 ```
 
@@ -270,7 +270,7 @@ stream:
     - listen:
         - addr: 143
         - addr: 993
-          ssl: { cert: /path/fullchain.pem, key: /path/privkey.pem }
+          ssl: { cert: /root/proxide/cert/fullchain.pem, key: /root/proxide/cert/privkey.pem }
       proxy:
         balance: round-robin
         upstream:
@@ -342,7 +342,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/etc/proxide
+WorkingDirectory=/root/proxide
 ExecStart=/usr/local/bin/proxide start
 ExecReload=/usr/local/bin/proxide signal -s reload
 Restart=always
@@ -365,7 +365,7 @@ rlimit:
 
 Each limit can also be overridden per invocation with a CLI flag or environment variable (`--rlimit-nofile` / `PROXIDE_RLIMIT_NOFILE`, and so on).
 
-Async runtime tuning is CLI / environment only:
+Async runtime tuning is CLI / environment only, as it cannot be changed by config changes later:
 
 ```sh
 proxide start --worker-threads 8    # defaults to the number of logical CPUs
