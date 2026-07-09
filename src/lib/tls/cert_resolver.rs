@@ -5,32 +5,14 @@ use crate::config::server_name::ServerName;
 
 #[derive(Debug)]
 pub struct CertResolver<T = Arc<CertifiedKey>>  {
-  default: Option<T>,
   items: Vec<(ServerName, T)>,
 }
 
 impl<T> CertResolver<T> {
   pub fn new() -> Self {
     Self {
-      default: None,
       items: Vec::new(),
     }
-  }
-
-  pub fn with_default<D: Into<Option<T>>>(default: D) -> Self {
-    Self {
-      default: default.into(),
-      items: Vec::new(),
-    }
-  }
-
-  pub fn default(&self) -> Option<&T> {
-    self.default.as_ref()
-  }
-
-  pub fn set_default<K: Into<Option<T>>>(&mut self, key: K) -> &mut Self {
-    self.default = key.into();
-    self
   }
 
   pub fn add(&mut self, server_name: ServerName, key: T) -> &mut Self {
@@ -43,23 +25,34 @@ impl<T> CertResolver<T> {
   }
 
   pub fn reset(&mut self) {
-    self.default = None;
     self.items.clear();
   }
 
   pub fn resolve_for_server_name<'a, S: Into<Option<&'a str>>>(&self, server_name: S) -> Option<&T> {
-    let wanted_name = match server_name.into() {
-      Some(name) => name,
-      None => return self.default.as_ref()
-    };
+    match server_name.into() {
+      Some(wanted_name) => {
+        for (pattern, key) in &self.items {
+          if pattern.matches(wanted_name) {
+            return Some(key)
+          }
+        }
 
-    for (pattern, key) in &self.items {
-      if pattern.matches(wanted_name) {
-        return Some(key)
+        None
+      }
+
+      // without SNI only a catch-all entry (an app without server_names) can serve,
+      // serving a name-specific certificate to a client that didn't ask for that name
+      // would only fail validation at the client end
+      None => {
+        for (pattern, key) in &self.items {
+          if matches!(pattern, ServerName::All) {
+            return Some(key)
+          }
+        }
+
+        None
       }
     }
-
-    self.default.as_ref()
   }
 }
 
@@ -70,7 +63,7 @@ impl Default for CertResolver {
 }
 
 impl ResolvesServerCert for CertResolver {
-  fn resolve(&self, client_hello: rustls::server::ClientHello) -> Option<Arc<CertifiedKey>> { 
+  fn resolve(&self, client_hello: rustls::server::ClientHello) -> Option<Arc<CertifiedKey>> {
     self
       .resolve_for_server_name(client_hello.server_name())
       .cloned()
@@ -87,33 +80,41 @@ use super::*;
 
 
   #[test]
-  fn resolves_default() {
+  fn does_not_resolve_without_server_name() {
     let mut resolver = CertResolver::<&'static str>::new();
-    resolver.set_default("default");
     resolver.add(ServerName::Exact(String::from("foo.com")), "foo");
-    
-    assert_eq!(resolver.resolve_for_server_name(None), Some(&"default"));
-    assert_eq!(resolver.resolve_for_server_name("var.com"), Some(&"default"));
-    
-    let resolver2 = CertResolver::<&'static str>::new();
-    assert_eq!(resolver2.resolve_for_server_name(None), None);
-    assert_eq!(resolver2.resolve_for_server_name("example.com"), None);
 
-    let resolver3 = CertResolver::with_default("default");
-    assert_eq!(resolver3.resolve_for_server_name(None), Some(&"default"));
+    assert_eq!(resolver.resolve_for_server_name(None), None);
+  }
+
+  #[test]
+  fn resolves_catch_all_without_server_name() {
+    let mut resolver = CertResolver::<&'static str>::new();
+    resolver.add(ServerName::Exact(String::from("foo.com")), "foo");
+    resolver.add(ServerName::All, "all");
+
+    assert_eq!(resolver.resolve_for_server_name(None), Some(&"all"));
+    assert_eq!(resolver.resolve_for_server_name("bar.com"), Some(&"all"));
+  }
+
+  #[test]
+  fn does_not_resolve_unmatched_server_name() {
+    let mut resolver = CertResolver::<&'static str>::new();
+    resolver.add(ServerName::Exact(String::from("foo.com")), "foo");
+
+    assert_eq!(resolver.resolve_for_server_name("bar.com"), None);
   }
 
   #[test]
   fn reset() {
     let mut resolver = CertResolver::<&'static str>::new();
-    resolver.set_default("default");
     resolver.add(ServerName::Exact(String::from("foo.com")), "foo");
 
-    assert_eq!(resolver.resolve_for_server_name(None), Some(&"default"));
+    assert_eq!(resolver.resolve_for_server_name("foo.com"), Some(&"foo"));
 
     resolver.reset();
 
-    assert_eq!(resolver.resolve_for_server_name(None), None);
+    assert_eq!(resolver.resolve_for_server_name("foo.com"), None);
   }
 
   #[test]
@@ -121,7 +122,7 @@ use super::*;
     let mut resolver = CertResolver::<&'static str>::new();
     resolver.add(ServerName::Exact(String::from("foo.com")), "foo");
     resolver.add(ServerName::Exact(String::from("bar.com")), "bar");
-    
+
     assert_eq!(resolver.resolve_for_server_name("foo.com"), Some(&"foo"));
     assert_eq!(resolver.resolve_for_server_name("bar.com"), Some(&"bar"));
 

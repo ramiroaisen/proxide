@@ -633,10 +633,6 @@ pub async fn instance_from_config(
       .with_context(|| format!("error binding in https mode at addr {local_addr}"))?;
 
     let mut cert_resolver = CertResolver::new();
-    if let Some((_, key)) = sni.first() {
-      cert_resolver.set_default(key.clone());
-    }
-
     for (server_name, key) in sni {
       cert_resolver.add(server_name, key);
     }

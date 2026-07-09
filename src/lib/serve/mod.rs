@@ -17,7 +17,7 @@ use std::{
   time::{Duration, Instant},
 };
 use tokio::net::{TcpListener, TcpStream};
-use tokio_rustls::{server::TlsStream, TlsAcceptor};
+use tokio_rustls::{server::TlsStream, LazyConfigAcceptor, TlsAcceptor};
 use tokio_util::{sync::CancellationToken, time::FutureExt};
 
 fn service_fn<F, Fut>(f: F) -> ServiceFn<F>
@@ -331,8 +331,6 @@ pub async fn serve_https(
   proxy_protocol_read_timeout: Duration,
   server_tls_handshake_timeout: Duration,
 ) {
-  let tls_acceptor = TlsAcceptor::from(tls_config);
-
   let graceful = crate::graceful::GracefulShutdown::new();
 
   let (conn_sender, conn_recv) = kanal::bounded_async::<(
@@ -363,7 +361,7 @@ pub async fn serve_https(
               log::warn!("error setting tcp stream nodelay: {e}");
             }
 
-            let tls_acceptor = tls_acceptor.clone();
+            let tls_config = tls_config.clone();
             let conn_sender = conn_sender.clone();
 
             let mut stream = graceful.guard(tcp_stream);
@@ -385,14 +383,30 @@ pub async fn serve_https(
                 }
               };
 
-              let tls_stream = match tls_acceptor.accept(stream).timeout(server_tls_handshake_timeout).await {
+              // accept lazily to keep the requested server name at hand when the handshake fails
+              let handshake = async move {
+                let start = match LazyConfigAcceptor::new(rustls::server::Acceptor::default(), stream).await {
+                  Ok(start) => start,
+                  Err(e) => return Err((e, None)),
+                };
+
+                let server_name = start.client_hello().server_name().map(String::from);
+
+                match start.into_stream(tls_config).await {
+                  Ok(tls_stream) => Ok(tls_stream),
+                  Err(e) => Err((e, server_name)),
+                }
+              };
+
+              let tls_stream = match handshake.timeout(server_tls_handshake_timeout).await {
                 Ok(Ok(tls_stream)) => tls_stream,
-                Ok(Err(e)) => {
-                  log::warn!("error accepting https connection: {e} - {e:?}");
+                Ok(Err((e, server_name))) => {
+                  let server_name = server_name.as_deref().unwrap_or("<none>");
+                  log::warn!("error accepting https connection from {remote_addr} (server name: {server_name}): {e} - {e:?}");
                   return;
                 }
                 Err(_) => {
-                  log::warn!("error accepting https connection: handshake timeout after {server_tls_handshake_timeout:?}");
+                  log::warn!("error accepting https connection from {remote_addr}: handshake timeout after {server_tls_handshake_timeout:?}");
                   return;
                 }
               };
@@ -638,11 +652,11 @@ pub async fn serve_ssl(
             let tls_stream = match tls_acceptor.accept(tcp_stream).timeout(server_tls_handshake_timeout).await {
               Ok(Ok(tls_stream)) => tls_stream,
               Ok(Err(e)) => {
-                log::warn!("error accepting tls stream: {e}");
+                log::warn!("error accepting tls stream from {remote_addr}: {e}");
                 return;
               }
               Err(_) => {
-                log::warn!("error accepting tls stream: handshake timeout after {server_tls_handshake_timeout:?}");
+                log::warn!("error accepting tls stream from {remote_addr}: handshake timeout after {server_tls_handshake_timeout:?}");
                 return;
               }
             };
