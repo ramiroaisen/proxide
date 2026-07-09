@@ -24,8 +24,8 @@ use crate::body::Body;
 use crate::client::pool::ProxyProtocolConfig;
 use crate::client::send_request;
 use crate::config::defaults::{
-  DEFAULT_HTTP_BALANCE, DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_RETRIES,
-  DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_HTTP_RETRY_BACKOFF,
+  DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT, DEFAULT_HTTP_BALANCE, DEFAULT_HTTP_PROXY_READ_TIMEOUT,
+  DEFAULT_HTTP_PROXY_RETRIES, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_HTTP_RETRY_BACKOFF,
   DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY, DEFAULT_STREAM_BALANCE,
   DEFAULT_STREAM_PROXY_READ_TIMEOUT, DEFAULT_STREAM_PROXY_RETRIES,
   DEFAULT_STREAM_PROXY_WRITE_TIMEOUT, DEFAULT_STREAM_RETRY_BACKOFF,
@@ -250,6 +250,7 @@ pub async fn serve_proxy(
     let handle_state_round_robin_index: &Arc<AtomicUsize>;
     let handle_proxy_read_timeout: Option<SDuration>;
     let handle_proxy_write_timeout: Option<SDuration>;
+    let handle_proxy_connection_idle_timeout: Option<SDuration>;
     let handle_proxy_tcp_nodelay: Option<bool>;
     let upstreams: &[HttpUpstream];
 
@@ -553,6 +554,7 @@ pub async fn serve_proxy(
           state_round_robin_index,
           proxy_read_timeout,
           proxy_write_timeout,
+          proxy_connection_idle_timeout,
           proxy_tcp_nodelay,
           healthcheck: _,
         } => {
@@ -567,6 +569,7 @@ pub async fn serve_proxy(
           handle_state_round_robin_index = state_round_robin_index;
           handle_proxy_read_timeout = *proxy_read_timeout;
           handle_proxy_write_timeout = *proxy_write_timeout;
+          handle_proxy_connection_idle_timeout = *proxy_connection_idle_timeout;
           handle_proxy_tcp_nodelay = *proxy_tcp_nodelay;
           break 'handle;
         }
@@ -754,6 +757,15 @@ pub async fn serve_proxy(
           => DEFAULT_HTTP_PROXY_WRITE_TIMEOUT
         );
 
+        let proxy_connection_idle_timeout = crate::option!(
+          @duration
+          upstream.proxy_connection_idle_timeout,
+          handle_proxy_connection_idle_timeout,
+          app.proxy_connection_idle_timeout,
+          config.http.proxy_connection_idle_timeout
+          => DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT
+        );
+
         let proxy_tcp_nodelay = crate::option!(
           upstream.proxy_tcp_nodelay,
           handle_proxy_tcp_nodelay,
@@ -820,6 +832,7 @@ pub async fn serve_proxy(
             &upstream.stats_total_write_bytes,
             Some(read_timeout),
             Some(write_timeout),
+            Some(proxy_connection_idle_timeout),
             proxy_tcp_nodelay,
             proxy_protocol_config,
           )
@@ -994,6 +1007,7 @@ pub async fn serve_proxy(
               &upstream.stats_total_write_bytes,
               Some(read_timeout),
               Some(write_timeout),
+              Some(proxy_connection_idle_timeout),
               proxy_tcp_nodelay,
               proxy_protocol_config,
             )
@@ -1038,6 +1052,7 @@ pub async fn serve_proxy(
               &upstream.stats_total_write_bytes,
               Some(read_timeout),
               Some(write_timeout),
+              Some(proxy_connection_idle_timeout),
               proxy_tcp_nodelay,
               proxy_protocol_config,
             )

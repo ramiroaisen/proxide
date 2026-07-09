@@ -28,7 +28,7 @@ use std::sync::atomic::AtomicU64;
 use crate::body::Body;
 use crate::config::{Config, HttpApp, HttpHandle, HttpUpstream, UpstreamVersion};
 use crate::net::timeout::TimeoutIo;
-use crate::config::defaults::{DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY};
+use crate::config::defaults::{DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT, DEFAULT_HTTP_PROXY_READ_TIMEOUT, DEFAULT_HTTP_PROXY_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY};
 use crate::proxy::error::{ErrorOriginator, ProxyHttpError};
 use crate::proxy_protocol::{self, ProxyHeader, ProxyProtocolVersion};
 use crate::serde::sni::Sni;
@@ -104,6 +104,7 @@ pub struct Key {
   pub sni: Option<Sni>,
   pub read_timeout: Duration,
   pub write_timeout: Duration,
+  pub idle_timeout: Duration,
   pub tcp_nodelay: bool,
   pub danger_accept_invalid_certs: bool,
   pub proxy_protocol: Option<ProxyProtocolConfig>
@@ -165,6 +166,18 @@ impl Key {
       => DEFAULT_PROXY_TCP_NODELAY
     );
 
+    let idle_timeout = crate::option!(
+      @duration
+      upstream.proxy_connection_idle_timeout,
+      match app.handle {
+        HttpHandle::Proxy { proxy_connection_idle_timeout, .. } => proxy_connection_idle_timeout,
+        _ => None,
+      },
+      app.proxy_connection_idle_timeout,
+      config.http.proxy_connection_idle_timeout
+      => DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT
+    );
+
     let proxy_protocol_config = match upstream.send_proxy_protocol {
       Some(version) => {
         let timeout = crate::option!(
@@ -200,6 +213,7 @@ impl Key {
       sni: upstream.sni.clone(),
       read_timeout,
       write_timeout,
+      idle_timeout,
       tcp_nodelay,
       danger_accept_invalid_certs: upstream.danger_accept_invalid_certs,
       proxy_protocol: proxy_protocol_config,
@@ -256,6 +270,7 @@ impl SendRequest {
 pub struct Sender {
   send: SendRequest,
   uid: usize,
+  last_used: std::time::Instant,
 }
 
 impl Sender {
@@ -340,7 +355,7 @@ impl Sender {
               let sender = Sender {
                 send,
                 uid,
-                // last_used: Instant::now(),
+                last_used: std::time::Instant::now(),
               };
 
               Ok(sender)
@@ -366,7 +381,7 @@ impl Sender {
               let sender = Sender {
                 send,
                 uid,
-                // last_used: Instant::now(),
+                last_used: std::time::Instant::now(),
               };
 
               Ok(sender)
@@ -464,7 +479,7 @@ impl Sender {
                 let sender = Sender {
                   send,
                   uid,
-                  // last_used: Instant::now(),
+                  last_used: std::time::Instant::now(),
                 };
 
                 Ok(sender)
@@ -486,7 +501,7 @@ impl Sender {
                 });
 
                 let send = SendRequest::Http2(conn_send);
-                let sender = Sender { send, uid };
+                let sender = Sender { send, uid, last_used: std::time::Instant::now() };
 
                 Ok(sender)
               }
@@ -507,7 +522,12 @@ impl Sender {
 pub struct Pool {
   #[debug(ignore)]
   map: Arc<RwLock<SenderMap>>,
+  #[debug(ignore)]
+  sweeper: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
+
+/// how often the pool sweeper checks for idle connections to evict
+const POOL_SWEEP_INTERVAL: Duration = Duration::from_millis(500);
 
 impl Pool {
   /**
@@ -515,13 +535,16 @@ impl Pool {
    */
   fn new() -> Self {
     let map = Arc::new(RwLock::new(SenderMap::new()));
-    Self { map }
+    Self {
+      map,
+      sweeper: Arc::new(Mutex::new(None)),
+    }
   }
 
   /**
-   * (re)inert a Sender into the pool. 
+   * (re)inert a Sender into the pool.
    */
-  pub fn insert(&self, key: Key, sender: Sender) {
+  pub fn insert(&self, key: Key, mut sender: Sender) {
     let list = {
       let map_read = self.map.read();
       match map_read.get(&key) {
@@ -534,7 +557,55 @@ impl Pool {
       }
     };
 
+    sender.last_used = std::time::Instant::now();
+    // senders are always pushed to the back, so each deque stays ordered
+    // from least recently used (front) to most recently used (back)
     list.lock().push_back(sender);
+
+    self.ensure_sweeper();
+  }
+
+  /**
+   * Spawn the task that evicts pooled senders that stayed idle past their key's idle_timeout. \
+   * If the runtime that spawned it goes away, it is respawned on the next insert.
+   */
+  fn ensure_sweeper(&self) {
+    let mut sweeper = self.sweeper.lock();
+    if let Some(handle) = &*sweeper {
+      if !handle.is_finished() {
+        return;
+      }
+    }
+
+    let weak = Arc::downgrade(&self.map);
+    *sweeper = Some(tokio::spawn(async move {
+      loop {
+        tokio::time::sleep(POOL_SWEEP_INTERVAL).await;
+
+        let map = match weak.upgrade() {
+          Some(map) => map,
+          None => return,
+        };
+
+        let lists = map
+          .read()
+          .iter()
+          .map(|(key, list)| (key.idle_timeout, list.clone()))
+          .collect::<Vec<_>>();
+
+        for (idle_timeout, list) in lists {
+          let mut list = list.lock();
+          while let Some(sender) = list.front() {
+            if sender.last_used.elapsed() >= idle_timeout {
+              // dropping the sender makes the connection task close the connection
+              list.pop_front();
+            } else {
+              break;
+            }
+          }
+        }
+      }
+    }));
   }
 
   /**
@@ -573,8 +644,10 @@ impl Pool {
       };
 
       loop {
+        // LIFO: reuse the most recently used sender so idle ones
+        // sink to the front of the deque and expire
         let mut sender = {
-          match deque.lock().pop_front() {
+          match deque.lock().pop_back() {
             Some(sender) => sender,
             None => break 'deque,
           }
@@ -624,10 +697,11 @@ impl Pool {
     write_counter: &Arc<AtomicU64>,
     read_timeout: Option<Duration>,
     write_timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
     tcp_nodelay: bool,
     proxy_protocol_config: Option<ProxyProtocolConfig>
   ) -> Result<Response, ClientError> {
-    
+
     let protocol = match request.uri().scheme_str() {
       Some("https") => Protocol::Https,
       Some("http") => Protocol::Http,
@@ -652,6 +726,7 @@ impl Pool {
 
     let read_timeout = read_timeout.unwrap_or(DEFAULT_HTTP_PROXY_READ_TIMEOUT);
     let write_timeout = write_timeout.unwrap_or(DEFAULT_HTTP_PROXY_WRITE_TIMEOUT);
+    let idle_timeout = idle_timeout.unwrap_or(DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT);
 
     #[cfg(feature = "client-log")]
     let (
@@ -674,6 +749,7 @@ impl Pool {
       sni,
       read_timeout,
       write_timeout,
+      idle_timeout,
       tcp_nodelay,
       danger_accept_invalid_certs: accept_invalid_certs,
       proxy_protocol: proxy_protocol_config,
@@ -724,6 +800,7 @@ impl Pool {
               let sender = Sender {
                 send: SendRequest::Http1(send),
                 uid,
+                last_used: std::time::Instant::now(),
               };
               pool.insert(key, sender);
               let (parts, inconming) = response.into_parts();
@@ -763,6 +840,7 @@ impl Pool {
                     let sender = Sender {
                       send: SendRequest::Http1(send),
                       uid,
+                      last_used: std::time::Instant::now(),
                     };
 
                     pool.insert(key, sender);
@@ -785,6 +863,7 @@ impl Pool {
             let sender = Sender {
               send: SendRequest::Http2(send.clone()),
               uid,
+              last_used: std::time::Instant::now(),
             };
 
             pool.insert(key, sender);
@@ -1065,6 +1144,7 @@ pub async fn send_request(
   write_counter: &Arc<AtomicU64>,
   read_timeout: Option<Duration>,
   write_timeout: Option<Duration>,
+  idle_timeout: Option<Duration>,
   tcp_nodelay: bool,
   proxy_protocol_config: Option<ProxyProtocolConfig>
 ) -> Result<Response, ClientError> {
@@ -1078,6 +1158,7 @@ pub async fn send_request(
     write_counter,
     read_timeout,
     write_timeout,
+    idle_timeout,
     tcp_nodelay,
     proxy_protocol_config
   ).await

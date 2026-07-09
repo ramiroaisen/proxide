@@ -329,6 +329,7 @@ pub async fn serve_https(
   graceful_shutdown_timeout: Option<Duration>,
   expect_proxy_protocol: Option<ExpectProxyProtocol>,
   proxy_protocol_read_timeout: Duration,
+  server_tls_handshake_timeout: Duration,
 ) {
   let tls_acceptor = TlsAcceptor::from(tls_config);
 
@@ -384,10 +385,14 @@ pub async fn serve_https(
                 }
               };
 
-              let tls_stream = match tls_acceptor.accept(stream).await {
-                Ok(tls_stream) => tls_stream,
-                Err(e) => {
+              let tls_stream = match tls_acceptor.accept(stream).timeout(server_tls_handshake_timeout).await {
+                Ok(Ok(tls_stream)) => tls_stream,
+                Ok(Err(e)) => {
                   log::warn!("error accepting https connection: {e} - {e:?}");
+                  return;
+                }
+                Err(_) => {
+                  log::warn!("error accepting https connection: handshake timeout after {server_tls_handshake_timeout:?}");
                   return;
                 }
               };
@@ -587,6 +592,7 @@ pub async fn serve_ssl(
   signal: CancellationToken,
   graceful_shutdown_timeout: Option<Duration>,
   proxy_protocol_read_timeout: Duration,
+  server_tls_handshake_timeout: Duration,
 ) {
   tokio::pin!(signal);
 
@@ -629,10 +635,14 @@ pub async fn serve_ssl(
               }
             };
 
-            let tls_stream = match tls_acceptor.accept(tcp_stream).await {
-              Ok(tls_stream) => tls_stream,
-              Err(e) => {
+            let tls_stream = match tls_acceptor.accept(tcp_stream).timeout(server_tls_handshake_timeout).await {
+              Ok(Ok(tls_stream)) => tls_stream,
+              Ok(Err(e)) => {
                 log::warn!("error accepting tls stream: {e}");
+                return;
+              }
+              Err(_) => {
+                log::warn!("error accepting tls stream: handshake timeout after {server_tls_handshake_timeout:?}");
                 return;
               }
             };

@@ -83,6 +83,15 @@ http:
   ## default write timeout for writing data to upstreams
   # proxy_write_timeout: 10m
 
+  ## timeout for completing the tls handshake of incoming https connections
+  ## stalled handshakes are closed after this period
+  ## this can also be specified at the root level
+  # server_tls_handshake_timeout: 60s
+
+  ## how long pooled upstream connections are kept open while idle
+  ## this can also be specified at the app or upstream level
+  # proxy_connection_idle_timeout: 60s
+
   apps:
     # an example server that redirect users to https
     - listen:
@@ -143,6 +152,11 @@ stream:
 
   ## default write timeout for writing data to stream upstreams
   # proxy_write_timeout: 5m # 5 min
+
+  ## timeout for completing the tls handshake of incoming ssl connections
+  ## stalled handshakes are closed after this period
+  ## this can also be specified at the root level
+  # server_tls_handshake_timeout: 60s
 
   ## stream retry options, this can also be specified at the app level
   ## default number of retries for http requests

@@ -18,7 +18,8 @@ use crate::{
       DEFAULT_HTTP_HEALTHCHECK, DEFAULT_HTTP_SERVER_READ_TIMEOUT,
       DEFAULT_HTTP_SERVER_WRITE_TIMEOUT, DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT,
       DEFAULT_PROXY_PROTOCOL_WRITE_TIMEOUT, DEFAULT_PROXY_TCP_NODELAY,
-      DEFAULT_STREAM_PROXY_READ_TIMEOUT, DEFAULT_STREAM_PROXY_WRITE_TIMEOUT,
+      DEFAULT_SERVER_TLS_HANDSHAKE_TIMEOUT, DEFAULT_STREAM_PROXY_READ_TIMEOUT,
+      DEFAULT_STREAM_PROXY_WRITE_TIMEOUT,
     },
     server_name::ServerName,
     Config, HttpApp, HttpHandle, StreamHandle,
@@ -566,6 +567,20 @@ pub async fn instance_from_config(
     => DEFAULT_PROXY_PROTOCOL_READ_TIMEOUT
   );
 
+  let http_server_tls_handshake_timeout = crate::option!(
+    @duration
+    config.http.server_tls_handshake_timeout,
+    config.server_tls_handshake_timeout,
+    => DEFAULT_SERVER_TLS_HANDSHAKE_TIMEOUT
+  );
+
+  let stream_server_tls_handshake_timeout = crate::option!(
+    @duration
+    config.stream.server_tls_handshake_timeout,
+    config.server_tls_handshake_timeout,
+    => DEFAULT_SERVER_TLS_HANDSHAKE_TIMEOUT
+  );
+
   // this is like a Barrier, all serve tasks will wait for this signal before start serving requests
   let (start, _) = tokio::sync::watch::channel::<()>(());
 
@@ -654,6 +669,7 @@ pub async fn instance_from_config(
             http_graceful_shutdown_timeout,
             expect_proxy_protocol,
             http_proxy_protocol_read_timeout,
+            http_server_tls_handshake_timeout,
           )
           .await;
           log::info!("https server at {} stopped", local_addr);
@@ -730,6 +746,7 @@ pub async fn instance_from_config(
             cancel,
             stream_graceful_shutdown_timeout,
             stream_proxy_protocol_read_timeout,
+            stream_server_tls_handshake_timeout,
           )
           .await;
         }

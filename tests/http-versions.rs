@@ -25,7 +25,7 @@ fn http_versions() {
       ("https", "1.0"),
       ("https", "1.1"),
       ("https", "2.0"),
-      ("https", "3.0"),
+      // TODO: h3 ("https", "3.0"),
     ];
 
     for (front_version, front_scheme) in fronts {

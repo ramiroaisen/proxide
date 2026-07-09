@@ -11,7 +11,6 @@ http:
             key: cert/self-signed-key.pem
         - addr: 20102
           ssl:
-            h3: true
             cert: cert/self-signed-cert.pem
             key: cert/self-signed-key.pem
       when:

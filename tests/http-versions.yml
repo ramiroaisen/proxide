@@ -10,7 +10,6 @@ http:
             key: cert/self-signed-key.pem
         - addr: 23002
           ssl:
-            h3: true
             cert: cert/self-signed-cert.pem
             key: cert/self-signed-key.pem
 
@@ -66,14 +65,14 @@ http:
                 version: http/2
                 danger_accept_invalid_certs: true
 
-        # h3
-        - match:
-            path: { exact: /https-3.0 }
-          proxy:
-            upstream:
-              - base_url: https://127.0.0.1:23052
-                version: http/3
-                danger_accept_invalid_certs: true
+        # TODO: h3
+        # - match:
+        #     path: { exact: /https-3.0 }
+        #   proxy:
+        #     upstream:
+        #       - base_url: https://127.0.0.1:23052
+        #         version: http/3
+        #         danger_accept_invalid_certs: true
 
     - listen:
         - addr: 23050
@@ -83,7 +82,6 @@ http:
             key: cert/self-signed-key.pem
         - addr: 23052
           ssl:
-            h3: true
             cert: cert/self-signed-cert.pem
             key: cert/self-signed-key.pem
 

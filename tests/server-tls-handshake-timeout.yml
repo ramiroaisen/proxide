@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../config.schema.json
+
+server_tls_handshake_timeout: 1s
+
+http:
+  apps:
+    - listen:
+        - addr: 26100
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      return:
+        status: 200
+        response_headers:
+          - [ x-test, server-tls-handshake-timeout ]
+
+stream:
+  apps:
+    - listen:
+        - addr: 26101
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:26102

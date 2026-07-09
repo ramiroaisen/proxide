@@ -89,6 +89,10 @@ pub mod defaults {
   pub const DEFAULT_STREAM_PROXY_READ_TIMEOUT: Duration = Duration::from_secs(60 * 60);
   pub const DEFAULT_STREAM_PROXY_WRITE_TIMEOUT: Duration = Duration::from_secs(60 * 5);
 
+  pub const DEFAULT_SERVER_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
+
+  pub const DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
   #[cfg(any(
     feature = "compression-br",
     feature = "compression-zstd",
@@ -225,6 +229,9 @@ pub struct Config {
   pub proxy_protocol_write_timeout: Option<SDuration>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub server_tls_handshake_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_tcp_nodelay: Option<bool>,
 
   #[serde(default, skip_serializing_if = "is_default")]
@@ -325,6 +332,12 @@ pub struct Http {
   pub proxy_write_timeout: Option<SDuration>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub server_tls_handshake_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_connection_idle_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_tcp_nodelay: Option<bool>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -389,6 +402,8 @@ impl Http {
         server_write_timeout: None,
         proxy_read_timeout: None,
         proxy_write_timeout: None,
+        server_tls_handshake_timeout: None,
+        proxy_connection_idle_timeout: None,
         proxy_protocol_read_timeout: None,
         proxy_tcp_nodelay: None,
         healthcheck: None,
@@ -413,6 +428,9 @@ pub struct Stream {
   pub proxy_read_timeout: Option<SDuration>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub server_tls_handshake_timeout: Option<SDuration>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_protocol_read_timeout: Option<SDuration>,
@@ -453,6 +471,7 @@ impl Stream {
         server_write_timeout: None,
         proxy_read_timeout: None,
         proxy_write_timeout: None,
+        server_tls_handshake_timeout: None,
         proxy_protocol_read_timeout: None,
         proxy_tcp_nodelay: None,
         healthcheck: None,
@@ -510,6 +529,9 @@ pub struct HttpApp {
   pub proxy_read_timeout: Option<SDuration>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_connection_idle_timeout: Option<SDuration>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_tcp_nodelay: Option<bool>,
@@ -583,6 +605,9 @@ pub struct HttpUpstream {
   pub proxy_read_timeout: Option<SDuration>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_write_timeout: Option<SDuration>,
+
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub proxy_connection_idle_timeout: Option<SDuration>,
 
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub proxy_tcp_nodelay: Option<bool>,
@@ -664,6 +689,7 @@ impl std::hash::Hash for HttpUpstream {
       proxy_protocol_write_timeout,
       proxy_read_timeout,
       proxy_write_timeout,
+      proxy_connection_idle_timeout,
       proxy_tcp_nodelay,
       version,
       proxy_headers,
@@ -711,6 +737,7 @@ impl std::hash::Hash for HttpUpstream {
     proxy_protocol_write_timeout.hash(state);
     proxy_read_timeout.hash(state);
     proxy_write_timeout.hash(state);
+    proxy_connection_idle_timeout.hash(state);
     proxy_tcp_nodelay.hash(state);
     proxy_headers.hash(state);
     response_headers.hash(state);
@@ -981,6 +1008,8 @@ pub enum HttpHandle {
     proxy_read_timeout: Option<SDuration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_write_timeout: Option<SDuration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_connection_idle_timeout: Option<SDuration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     proxy_tcp_nodelay: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

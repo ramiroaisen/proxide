@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=../config.schema.json
+
+http:
+  proxy_connection_idle_timeout: 1s
+
+  apps:
+    - listen:
+        - addr: 26200
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:26201

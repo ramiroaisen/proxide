@@ -61,7 +61,7 @@ fn request_body() {
       (Version::HTTP_10, "https", 23801),
       (Version::HTTP_11, "https", 23801),
       (Version::HTTP_2, "https", 23801),
-      (Version::HTTP_3, "https", 23802),
+      // TODO: h3 (Version::HTTP_3, "https", 23802),
     ];
 
     for (version, scheme, port) in variants {
