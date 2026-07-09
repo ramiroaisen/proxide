@@ -33,7 +33,7 @@ Prebuilt binaries for Linux (x86_64 / aarch64), macOS, and Windows are available
 
 ```sh
 tar -xzf proxide-*.tar.gz
-sudo mv proxide /usr/local/bin/
+sudo mv proxide /bin/
 proxide --version
 ```
 
@@ -343,8 +343,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/root/proxide
-ExecStart=/usr/local/bin/proxide start
-ExecReload=/usr/local/bin/proxide signal -s reload
+ExecStart=/bin/proxide start
+ExecReload=/bin/proxide signal -s reload
 Restart=always
 
 [Install]
