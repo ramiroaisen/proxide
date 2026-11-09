@@ -67,8 +67,8 @@ impl LogFile {
     self.cancel_token.is_cancelled()
   }
 
-  pub fn start_or_config(&'static self, mut config: LogFileConfig) -> Option<JoinHandle<Result<(), LogFileError>>> {
-    
+  pub fn start_or_config(&'static self, config: LogFileConfig) -> Option<JoinHandle<Result<(), LogFileError>>> {
+    let mut config = config.for_instance(std::env::var(INSTANCE_ID_VAR).ok().as_deref());
 
     if self.started.swap(true, Ordering::AcqRel) { 
       let _ = self.config_sender.send(config);
@@ -299,6 +299,29 @@ pub struct LogFileConfig {
   pub retain: Option<usize>, 
 }
 
+/// When set, each process logs to its own files: `log/access.log` becomes `log/access-<id>.log`.
+///
+/// A process counts only the bytes it writes and renames the file on its own, so processes
+/// running the same config must not share a path. With r2, set `instance_var: PROXIDE_INSTANCE_ID`.
+const INSTANCE_ID_VAR: &str = "PROXIDE_INSTANCE_ID";
+
+impl LogFileConfig {
+  fn for_instance(mut self, id: Option<&str>) -> Self {
+    if let Some(id) = id.filter(|id| !id.is_empty()) {
+      let path = std::path::Path::new(&self.path);
+      let name = match (path.file_stem(), path.extension()) {
+        (Some(stem), Some(ext)) => Some(format!("{}-{id}.{}", stem.to_string_lossy(), ext.to_string_lossy())),
+        (Some(stem), None) => Some(format!("{}-{id}", stem.to_string_lossy())),
+        _ => None,
+      };
+      if let Some(name) = name {
+        self.path = path.with_file_name(name).to_string_lossy().into_owned();
+      }
+    }
+    self
+  }
+}
+
 #[derive(Debug, thiserror::Error)]
   pub enum LogFileError {
     #[error("invalid log file path: no file name")]
@@ -324,3 +347,26 @@ pub struct LogFileConfig {
     #[error("write: {0}")]
     Write(std::io::Error),
   }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn path(path: &str, id: Option<&str>) -> String {
+    let config = LogFileConfig { path: path.to_string(), max_size_mb: None, retain: None };
+    config.for_instance(id).path
+  }
+
+  #[test]
+  fn adds_the_instance_id_to_the_file_name() {
+    assert_eq!(path("log/access.log", Some("3")), "log/access-3.log");
+    assert_eq!(path("/var/log.d/access", Some("3")), "/var/log.d/access-3");
+    assert_eq!(path("client.log", Some("10")), "client-10.log");
+  }
+
+  #[test]
+  fn keeps_the_path_without_an_instance_id() {
+    assert_eq!(path("log/access.log", None), "log/access.log");
+    assert_eq!(path("log/access.log", Some("")), "log/access.log");
+  }
+}

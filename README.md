@@ -319,6 +319,8 @@ primary_log:             # the main application log, mirrored to a file
 
 Logs rotate by size and are written asynchronously, so they don't block request handling.
 
+When several processes run the same config, set `PROXIDE_INSTANCE_ID` to a different value in each one, because a process counts and rotates only what it wrote. `log/access.log` then becomes `log/access-<id>.log`, and `retain` applies per process. Without the variable every process uses the configured path. With r2, set `instance_var: PROXIDE_INSTANCE_ID` in the app file.
+
 ## Running in production
 
 ### Signals: reload, graceful shutdown
