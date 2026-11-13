@@ -251,15 +251,21 @@ All durations take human-friendly values like `30s`, `5m`, `1h`.
 
 ```yaml
 http:
-  server_read_timeout: 120s    # reading from clients
-  server_write_timeout: 120s   # writing to clients
-  proxy_read_timeout: 1h       # reading from upstreams
-  proxy_write_timeout: 10m     # writing to upstreams
+  server_read_timeout: 120s    # a client that stays silent when it is its turn to send
+  server_write_timeout: 120s   # a client that does not accept the data it is sent
+  proxy_read_timeout: 1h       # an upstream that stays silent while nothing is sent to it
+  proxy_write_timeout: 10m     # an upstream that does not accept the data it is sent
   server_tls_handshake_timeout: 60s   # completing the TLS handshake on https listeners
   proxy_connection_idle_timeout: 60s     # keeping idle pooled upstream connections open
 ```
 
 The same keys exist under `stream` (except `proxy_connection_idle_timeout`), and per app / per upstream. `server_tls_handshake_timeout` can also be set at the root level.
+
+The read and write timeouts are inactivity timeouts, they never limit how long a request, a response or a connection can last:
+
+- `server_read_timeout` runs while the client is the one expected to send something: between the requests of a keep-alive connection, and in the middle of a request head or body. It does not run while the client waits for a response or receives one, so slow upstreams, long downloads and endless responses (audio streams, server-sent events) are not cut by it. A client that stops taking a response is closed by `server_write_timeout` on HTTP/1, and by `server_read_timeout` on HTTP/2, where a stalled flow control window blocks no write.
+- `proxy_read_timeout` is the limit for the time an upstream takes to start its response, and for the silences in the middle of it. It does not run while a request body is still being uploaded to the upstream.
+- In tunnels (stream apps, WebSockets and other upgrades) a read timeout closes the connection when one side is silent and nothing is being sent to it either. Traffic in a single direction keeps the tunnel open.
 
 ### TCP / TLS stream proxying
 

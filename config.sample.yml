@@ -71,16 +71,24 @@ http:
   #  - [ "x-example-name", "example-value" ]
 
   ## http timeouts
-  ## default read timeout for reading data from http/s clients
+  ## these are inactivity timeouts, not limits for the duration of a request
+  ## or a connection, a read timeout only runs while the other side is the
+  ## one expected to send something
+
+  ## how long an http/s client can stay silent when it is its turn to send:
+  ## between requests of a keep-alive connection, or in the middle of a request.
+  ## it does not run while the client waits for a response or receives it
   # server_read_timeout: 120s
 
-  ## default write timeout for writing data to http/s clients
+  ## how long an http/s client can go without accepting the data it is being sent
   # server_write_timeout: 120s
 
-  ## default read timeout for reading data from upstreams
+  ## how long an upstream can stay silent while nothing is being sent to it:
+  ## this is the limit for the time an upstream takes to start a response,
+  ## and for the silences in the middle of one
   # proxy_read_timeout: 1h
 
-  ## default write timeout for writing data to upstreams
+  ## how long an upstream can go without accepting the data it is being sent
   # proxy_write_timeout: 10m
 
   ## timeout for completing the tls handshake of incoming https connections
@@ -141,16 +149,20 @@ http:
 stream:
 
   ## stream timeouts
-  ## default read timeout for reading data from stream clients
+  ## these are inactivity timeouts: a read timeout closes the tunnel when
+  ## one side stays silent and nothing is being sent to it either, traffic
+  ## in a single direction keeps the tunnel open
+
+  ## how long a stream client can stay silent while nothing is sent to it
   # server_read_timeout: 1h # 1 hr
 
-  ## default write timeout for writing data to stream clients
+  ## how long a stream client can go without accepting the data it is being sent
   # server_write_timeout: 5m # 5 min
 
-  ## default read timeout for reading data from stream upstreams
+  ## how long a stream upstream can stay silent while nothing is sent to it
   # proxy_read_timeout: 1h # 1 hr
 
-  ## default write timeout for writing data to stream upstreams
+  ## how long a stream upstream can go without accepting the data it is being sent
   # proxy_write_timeout: 5m # 5 min
 
   ## timeout for completing the tls handshake of incoming ssl connections

@@ -24,7 +24,7 @@ fn service_fn<F, Fut>(f: F) -> ServiceFn<F>
 where
   F: FnOnce(Request<Incoming>) -> Fut,
   F: Clone,
-  Fut: Future<Output = Result<Response<crate::body::Body>, Infallible>>,
+  Fut: Future<Output = Result<Response<TrackedBody>, Infallible>>,
 {
   ServiceFn { f }
 }
@@ -36,9 +36,9 @@ impl<F, Fut> hyper::service::Service<Request<Incoming>> for ServiceFn<F>
 where
   F: FnOnce(Request<Incoming>) -> Fut,
   F: Clone,
-  Fut: Future<Output = Result<Response<crate::body::Body>, Infallible>>,
+  Fut: Future<Output = Result<Response<TrackedBody>, Infallible>>,
 {
-  type Response = Response<crate::body::Body>;
+  type Response = Response<TrackedBody>;
   type Error = Infallible;
   type Future = Fut;
 
@@ -47,11 +47,14 @@ where
   }
 }
 
+pub mod turn;
+
+use turn::TrackedBody;
+
 use crate::{
-  body::map_request_body,
   config::Config,
   graceful::GracefulGuard,
-  net::timeout::TimeoutIo,
+  net::timeout::{ReadGate, TimeoutIo},
   proxy::service::{serve_proxy, serve_stream_proxy, HttpBindKind},
   proxy_protocol::{ExpectProxyProtocol, ProxyHeader},
 };
@@ -262,16 +265,17 @@ pub async fn serve_http(
       };
 
       // no need to graceful.guard() here as it is already guarded after the accept
-      let io = Box::pin(TokioIo::new(TimeoutIo::new(
-        stream,
-        read_timeout,
-        write_timeout,
-      )));
+      // the requests of this connection suspend its read timeout while
+      // the client is the one waiting, see the turn module
+      let read_gate = ReadGate::new();
+
+      let io = Box::pin(TokioIo::new(
+        TimeoutIo::new(stream, read_timeout, write_timeout).with_read_gate(read_gate.clone()),
+      ));
 
       let service = service_fn(move |req| async move {
-        let req: Request<crate::body::Body> =
-          map_request_body(req, |incoming: Incoming| incoming.into());
-        match serve_proxy(
+        let (req, turn) = turn::track(&read_gate, req);
+        let response = match serve_proxy(
           req,
           &config,
           local_addr,
@@ -281,9 +285,11 @@ pub async fn serve_http(
         )
         .await
         {
-          Ok(response) => Ok::<_, Infallible>(response),
-          Err(e) => Ok(e.to_response()),
-        }
+          Ok(response) => response,
+          Err(e) => e.to_response(),
+        };
+
+        Ok::<_, Infallible>(turn.track(response))
       });
 
       let conn = http
@@ -436,16 +442,17 @@ pub async fn serve_https(
       };
 
       // no need to graceful.guard() here as it is already guarded after the accept
-      let io = Box::pin(TokioIo::new(TimeoutIo::new(
-        tls_stream,
-        read_timeout,
-        write_timeout,
-      )));
+      // the requests of this connection suspend its read timeout while
+      // the client is the one waiting, see the turn module
+      let read_gate = ReadGate::new();
+
+      let io = Box::pin(TokioIo::new(
+        TimeoutIo::new(tls_stream, read_timeout, write_timeout).with_read_gate(read_gate.clone()),
+      ));
 
       let service = service_fn(move |req| async move {
-        let req: Request<crate::body::Body> =
-          map_request_body(req, |incoming: Incoming| incoming.into());
-        match serve_proxy(
+        let (req, turn) = turn::track(&read_gate, req);
+        let response = match serve_proxy(
           req,
           &config,
           local_addr,
@@ -455,9 +462,11 @@ pub async fn serve_https(
         )
         .await
         {
-          Ok(response) => Ok::<_, Infallible>(response),
-          Err(e) => Ok(e.to_response()),
-        }
+          Ok(response) => response,
+          Err(e) => e.to_response(),
+        };
+
+        Ok::<_, Infallible>(turn.track(response))
       });
 
       let conn = http

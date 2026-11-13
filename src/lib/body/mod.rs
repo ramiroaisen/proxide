@@ -42,6 +42,7 @@ pub struct Body {
   #[pin]
   pub(crate) kind: BodyKind,
   pub(crate) on_drop: Vec<Box<dyn FnOnce() + Send + Sync + 'static>>,
+  pub(crate) on_end: Vec<Box<dyn FnOnce() + Send + Sync + 'static>>,
 }
 
 impl Debug for Body {
@@ -71,7 +72,8 @@ impl From<Incoming> for Body {
 #[pinned_drop]
 impl PinnedDrop for Body {
   fn drop(self: Pin<&mut Self>) {
-    for fun in self.project().on_drop.drain(..) {
+    let me = self.project();
+    for fun in me.on_end.drain(..).chain(me.on_drop.drain(..)) {
       fun();
     }
   }
@@ -82,6 +84,7 @@ impl Body {
     Self {
       kind: BodyKind::empty(),
       on_drop: vec![],
+      on_end: vec![],
     }
   }
 
@@ -89,6 +92,7 @@ impl Body {
     Self {
       kind: BodyKind::full(data),
       on_drop: vec![],
+      on_end: vec![],
     }
   }
 
@@ -96,6 +100,7 @@ impl Body {
     Self {
       kind: BodyKind::incoming(incoming),
       on_drop: vec![],
+      on_end: vec![],
     }
   }
 
@@ -105,6 +110,7 @@ impl Body {
     Self {
       kind: BodyKind::stream(stream),
       on_drop: vec![],
+      on_end: vec![],
     }
   }
 
@@ -113,6 +119,7 @@ impl Body {
     let body = Self {
       kind,
       on_drop: vec![],
+      on_end: vec![],
     };
 
     (body, sender)
@@ -120,6 +127,18 @@ impl Body {
 
   pub fn on_drop<F: FnOnce() + Send + Sync + 'static>(&mut self, fun: F) {
     self.on_drop.push(Box::new(fun));
+  }
+
+  /// Runs `fun` once, as soon as the body has nothing more to yield: when
+  /// it yields its last frame, when it fails, or when it is dropped,
+  /// whatever happens first. A body that is already at its end runs it
+  /// right away.
+  pub fn on_end<F: FnOnce() + Send + Sync + 'static>(&mut self, fun: F) {
+    if self.kind.is_end_stream() {
+      fun();
+    } else {
+      self.on_end.push(Box::new(fun));
+    }
   }
 }
 
@@ -235,7 +254,24 @@ impl HyperBody for Body {
     self: Pin<&mut Self>,
     cx: &mut Context<'_>,
   ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-    self.project().kind.poll_frame(cx)
+    let mut me = self.project();
+    let poll = me.kind.as_mut().poll_frame(cx);
+
+    if !me.on_end.is_empty() {
+      let ended = match &poll {
+        Poll::Pending => false,
+        Poll::Ready(Some(Ok(_))) => me.kind.is_end_stream(),
+        Poll::Ready(Some(Err(_))) | Poll::Ready(None) => true,
+      };
+
+      if ended {
+        for fun in me.on_end.drain(..) {
+          fun();
+        }
+      }
+    }
+
+    poll
   }
 
   fn is_end_stream(&self) -> bool {
@@ -251,7 +287,7 @@ impl Stream for Body {
   type Item = <BodyKind as Stream>::Item;
 
   fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-    self.project().kind.poll_next(cx)
+    HyperBody::poll_frame(self, cx)
   }
 
   fn size_hint(&self) -> (usize, Option<usize>) {
@@ -380,6 +416,121 @@ mod test {
     });
 
     assert_contents!(body, Bytes::from_static(b"hello world"));
+  }
+
+  /// counts how many times an `on_end` / `on_drop` hook ran
+  fn counter() -> (
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    impl FnOnce() + Send + Sync + 'static,
+  ) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let count = std::sync::Arc::new(AtomicUsize::new(0));
+    let hook = {
+      let count = count.clone();
+      move || {
+        count.fetch_add(1, Ordering::SeqCst);
+      }
+    };
+    (count, hook)
+  }
+
+  macro_rules! assert_count {
+    ($count:ident, $expected:expr) => {
+      assert_eq!($count.load(std::sync::atomic::Ordering::SeqCst), $expected)
+    };
+  }
+
+  #[tokio::test]
+  async fn on_end_runs_right_away_for_an_ended_body() {
+    let (count, hook) = counter();
+    let mut body = Body::empty();
+    body.on_end(hook);
+    assert_count!(count, 1);
+    drop(body);
+    assert_count!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn on_end_runs_at_the_last_frame_and_only_once() {
+    let (count, hook) = counter();
+    let mut body = Body::full(Bytes::from_static(b"hello"));
+    body.on_end(hook);
+    assert_count!(count, 0);
+
+    // the only frame is also the last one, there is no need to poll again
+    let frame = body.frame().await.unwrap().unwrap();
+    assert_eq!(frame.into_data().unwrap().as_ref(), b"hello");
+    assert_count!(count, 1);
+
+    assert!(body.frame().await.is_none());
+    drop(body);
+    assert_count!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn on_end_runs_at_the_end_of_a_stream() {
+    let (count, hook) = counter();
+    let mut body = Body::stream(async_stream::stream! {
+      yield Ok(Frame::data(Bytes::from_static(b"hello")));
+      yield Ok(Frame::data(Bytes::from_static(b"world")));
+    });
+    body.on_end(hook);
+
+    assert!(body.frame().await.is_some());
+    assert!(body.frame().await.is_some());
+    // a stream is only known to have ended when it says so
+    assert_count!(count, 0);
+    assert!(body.frame().await.is_none());
+    assert_count!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn on_end_runs_when_polled_as_a_stream() {
+    let (count, hook) = counter();
+    let mut body = Body::stream(async_stream::stream! {
+      yield Ok(Frame::data(Bytes::from_static(b"hello")));
+    });
+    body.on_end(hook);
+
+    assert!(futures::StreamExt::next(&mut body).await.is_some());
+    assert_count!(count, 0);
+    assert!(futures::StreamExt::next(&mut body).await.is_none());
+    assert_count!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn on_end_runs_on_error() {
+    let (count, hook) = counter();
+    let mut body = Body::stream(async_stream::stream! {
+      yield Ok(Frame::data(Bytes::from_static(b"hello")));
+      yield Err(ProxyHttpError::NoHost);
+      yield Ok(Frame::data(Bytes::from_static(b"unreachable")));
+    });
+    body.on_end(hook);
+
+    assert!(body.frame().await.unwrap().is_ok());
+    assert_count!(count, 0);
+    assert!(body.frame().await.unwrap().is_err());
+    assert_count!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn on_end_runs_on_drop_before_on_drop() {
+    let order = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let mut body = Body::stream(async_stream::stream! {
+      yield Ok(Frame::data(Bytes::from_static(b"hello")));
+      yield Ok(Frame::data(Bytes::from_static(b"world")));
+    });
+
+    let o = order.clone();
+    body.on_drop(move || o.lock().push("drop"));
+    let o = order.clone();
+    body.on_end(move || o.lock().push("end"));
+
+    assert!(body.frame().await.is_some());
+    assert!(order.lock().is_empty());
+    drop(body);
+    assert_eq!(*order.lock(), ["end", "drop"]);
   }
 
   #[tokio::test]

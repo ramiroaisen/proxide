@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=../config.schema.json
+
+# every server side timeout is 1s and every test upstream takes ~3s,
+# so anything that is cut by a timeout it should not be subject to fails here
+
+http:
+  server_read_timeout: 1s
+  server_write_timeout: 1s
+
+  apps:
+    # server timeouts only, the upstream keeps its default (long) timeouts
+    - listen:
+        - addr: 26400
+        - addr: 26401
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:26450
+
+    # short upstream read timeout, without retries: a timeout is final
+    - listen:
+        - addr: 26403
+      proxy:
+        retries: 0
+        upstream:
+          - base_url: http://127.0.0.1:26450
+            proxy_read_timeout: 1s
+
+    # websocket upstream
+    - listen:
+        - addr: 26404
+        - addr: 26405
+          ssl:
+            cert: cert/self-signed-cert.pem
+            key: cert/self-signed-key.pem
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:26453
+
+stream:
+  apps:
+    - listen:
+        - addr: 26402
+      server_read_timeout: 1s
+      proxy_read_timeout: 1s
+      proxy:
+        upstream:
+          - origin: tcp://127.0.0.1:26451
