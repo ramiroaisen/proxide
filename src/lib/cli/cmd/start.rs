@@ -166,6 +166,9 @@ pub async fn start(args: args::Start) -> Result<(), anyhow::Error> {
               Err(e) => {
                 // if the new instance fails, we do not signal the old instance to gracefully shutdown
                 log::error!("error upgrading instance: {e}");
+                // but we stop whatever the failed one already spawned
+                // (healthchecks, the stats logger), or it runs forever
+                new_cancel.cancel();
                 continue;
               }
             };
@@ -1067,8 +1070,17 @@ pub async fn instance_from_config(
    * that the config is valid and the addresses were available for binding by this process
    */
 
+  // a config that binds nothing has nothing to serve; on a reload this must
+  // be an error (the previous instance keeps serving), never a panic — an
+  // unwrap here used to take the whole process down
+  if handles.is_empty() {
+    anyhow::bail!("the config binds no address, there is nothing to serve");
+  }
+
   // signal the serve tasks to start serving requests
-  start.send(()).unwrap();
+  start
+    .send(())
+    .map_err(|_| anyhow::anyhow!("no serve task is waiting to start"))?;
 
   // this funtion returns a tokio JoinHandler that resolves when all the handles have finished ok
   // or when any spawned serve task panics

@@ -186,6 +186,8 @@ pub async fn serve_http(
   let (conn_sender, conn_recv) =
     kanal::bounded_async::<(GracefulGuard<TcpStream>, SocketAddr, Option<ProxyHeader>)>(0);
 
+  let conn_cancel = cancel.clone();
+
   let accept_task = {
     let graceful = graceful.clone();
 
@@ -259,9 +261,21 @@ pub async fn serve_http(
   let connection_task = async move {
     loop {
       let config = config.clone();
-      let (stream, remote_addr, proxy_header) = match conn_recv.recv().await {
-        Ok(conn) => conn,
-        Err(_) => break,
+      let (stream, remote_addr, proxy_header) = tokio::select! {
+        biased;
+        // The instance is shutting down: stop taking connections at once and
+        // start the graceful shutdown of the open ones (below). Waiting for
+        // the channel to close instead waits for every pending TLS handshake /
+        // PROXY header to finish or time out (60 s by default), and meanwhile
+        // this instance keeps answering on its keep-alive connections with
+        // its — now old — config. A connection whose handshake completes after
+        // this point is dropped unserved; its client retries on the new
+        // instance, like the connections left in the listener's backlog.
+        _ = conn_cancel.cancelled() => break,
+        conn = conn_recv.recv() => match conn {
+          Ok(conn) => conn,
+          Err(_) => break,
+        },
       };
 
       // no need to graceful.guard() here as it is already guarded after the accept
@@ -308,6 +322,9 @@ pub async fn serve_http(
       });
     }
 
+    // pending handshake tasks see a closed channel and drop their stream
+    drop(conn_recv);
+
     if let Some(timeout) = graceful_shutdown_timeout {
       if graceful.shutdown().timeout(timeout).await.is_err() {
         log::info!(
@@ -344,6 +361,8 @@ pub async fn serve_https(
     SocketAddr,
     Option<ProxyHeader>,
   )>(0);
+
+  let conn_cancel = cancel.clone();
 
   let accept_task = {
     let graceful = graceful.clone();
@@ -436,9 +455,21 @@ pub async fn serve_https(
 
     loop {
       let config = config.clone();
-      let (tls_stream, remote_addr, proxy_header) = match conn_recv.recv().await {
-        Ok(tls_stream) => tls_stream,
-        Err(_) => break,
+      let (tls_stream, remote_addr, proxy_header) = tokio::select! {
+        biased;
+        // The instance is shutting down: stop taking connections at once and
+        // start the graceful shutdown of the open ones (below). Waiting for
+        // the channel to close instead waits for every pending TLS handshake /
+        // PROXY header to finish or time out (60 s by default), and meanwhile
+        // this instance keeps answering on its keep-alive connections with
+        // its — now old — config. A connection whose handshake completes after
+        // this point is dropped unserved; its client retries on the new
+        // instance, like the connections left in the listener's backlog.
+        _ = conn_cancel.cancelled() => break,
+        conn = conn_recv.recv() => match conn {
+          Ok(conn) => conn,
+          Err(_) => break,
+        },
       };
 
       // no need to graceful.guard() here as it is already guarded after the accept
@@ -485,6 +516,9 @@ pub async fn serve_https(
         drop(guard);
       });
     }
+
+    // pending handshake tasks see a closed channel and drop their stream
+    drop(conn_recv);
 
     if let Some(timeout) = graceful_shutdown_timeout {
       if graceful.shutdown().timeout(timeout).await.is_err() {
@@ -624,6 +658,8 @@ pub async fn serve_ssl(
 
   let tls_acceptor = TlsAcceptor::from(tls_config);
 
+  let conn_cancel = CancellationToken::clone(&signal);
+
   let accept_task = async move {
     let cancelled = signal.cancelled();
     tokio::pin!(cancelled);
@@ -684,7 +720,17 @@ pub async fn serve_ssl(
   let handle_task = async move {
     let graceful = crate::graceful::GracefulShutdown::new();
 
-    while let Ok((stream, remote_addr, proxy_header)) = conn_recv.recv().await {
+    loop {
+      // as in serve_https: on cancel, stop taking connections and start the
+      // graceful shutdown now instead of waiting for every pending handshake
+      let (stream, remote_addr, proxy_header) = tokio::select! {
+        biased;
+        _ = conn_cancel.cancelled() => break,
+        conn = conn_recv.recv() => match conn {
+          Ok(conn) => conn,
+          Err(_) => break,
+        },
+      };
       let graceful_stream = graceful.guard(stream);
 
       let fut = serve_stream_proxy(
@@ -706,6 +752,8 @@ pub async fn serve_ssl(
         drop(guard);
       });
     }
+
+    drop(conn_recv);
 
     if let Some(timeout) = graceful_shutdown_timeout {
       if graceful.shutdown().timeout(timeout).await.is_err() {
