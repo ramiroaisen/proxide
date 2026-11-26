@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=../config.schema.json
+
+pidfile: "%PIDFILE%"
+graceful_shutdown_timeout: 60s
+
+http:
+  reload_drain_timeout: 2s
+  apps:
+    - server_names: [ proxy.test ]
+      reload_drain_timeout: %PROXY_DRAIN%
+      listen:
+        - addr: 25643
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:25644
+    - server_names: [ site.test ]
+      listen:
+        - addr: 25643
+      proxy:
+        upstream:
+          - base_url: http://127.0.0.1:25644

@@ -258,6 +258,10 @@ pub async fn instance_from_config(
   config: Config,
   cancel: CancellationToken,
 ) -> Result<JoinHandle<Result<(), anyhow::Error>>, anyhow::Error> {
+  // a reload_drain_timeout above 6 h is a config error (on a reload the
+  // running instance keeps serving)
+  crate::config::check_reload_drain_timeouts(&config).map_err(anyhow::Error::msg)?;
+
   let config = Arc::new(config);
 
   // log level can be configured from config file or from command line (and env)

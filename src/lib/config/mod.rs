@@ -93,6 +93,14 @@ pub mod defaults {
 
   pub const DEFAULT_HTTP_PROXY_CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
+  /// How long a connection still busy on the previous instance may keep
+  /// running after a config reload (SIGUSR1) before it is cut — see
+  /// `reload_drain_timeout`. Idle keep-alive connections leave at once.
+  pub const DEFAULT_HTTP_RELOAD_DRAIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+  /// The highest `reload_drain_timeout` a config may set.
+  pub const MAX_HTTP_RELOAD_DRAIN_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+
   #[cfg(any(
     feature = "compression-br",
     feature = "compression-zstd",
@@ -343,6 +351,14 @@ pub struct Http {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub graceful_shutdown_timeout: Option<SDuration>,
 
+  /// After a config reload (SIGUSR1), how long a connection still busy on the
+  /// previous instance (a live stream, a long download) may keep running
+  /// before it is cut. Default 5 min, at most 6 h; an app can set its own. A
+  /// connection gets the longest value of the apps it served. Process
+  /// shutdown (SIGINT) is still bounded by `graceful_shutdown_timeout`.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub reload_drain_timeout: Option<SDuration>,
+
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub response_headers: ResponseHeaders,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -377,6 +393,7 @@ impl Http {
         retry_backoff: None,
         proxy_protocol_write_timeout: None,
         graceful_shutdown_timeout: None,
+        reload_drain_timeout: None,
         #[cfg(any(
           feature = "compression-br",
           feature = "compression-zstd",
@@ -489,6 +506,10 @@ pub struct HttpApp {
   pub listen: Vec<Listen>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub server_names: Option<Vec<ServerName>>,
+
+  /// This app's [`Http::reload_drain_timeout`] (at most 6 h).
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub reload_drain_timeout: Option<SDuration>,
 
   #[cfg(any(
     feature = "compression-br",
@@ -1336,4 +1357,31 @@ pub mod export {
       assert!(validate_compression(item).is_err());
     }
   }
+}
+
+/// The reload drain timeout of a request: its app's `reload_drain_timeout`,
+/// else the `http` one, else [`defaults::DEFAULT_HTTP_RELOAD_DRAIN_TIMEOUT`].
+pub fn reload_drain_timeout_of(config: &Config, app: Option<&HttpApp>) -> Duration {
+  app
+    .and_then(|app| app.reload_drain_timeout)
+    .or(config.http.reload_drain_timeout)
+    .map(|d| d.0)
+    .unwrap_or(defaults::DEFAULT_HTTP_RELOAD_DRAIN_TIMEOUT)
+}
+
+/// A `reload_drain_timeout` above [`defaults::MAX_HTTP_RELOAD_DRAIN_TIMEOUT`]
+/// is a config error (on a reload: the running instance keeps serving).
+pub fn check_reload_drain_timeouts(config: &Config) -> Result<(), String> {
+  let max = defaults::MAX_HTTP_RELOAD_DRAIN_TIMEOUT;
+  let check = |d: Option<SDuration>, at: &str| match d {
+    Some(d) if d.0 > max => Err(format!(
+      "reload_drain_timeout {d} at {at} is above the maximum of 6h"
+    )),
+    _ => Ok(()),
+  };
+  check(config.http.reload_drain_timeout, "http")?;
+  for (i, app) in config.http.apps.iter().enumerate() {
+    check(app.reload_drain_timeout, &format!("http.apps[{i}]"))?;
+  }
+  Ok(())
 }

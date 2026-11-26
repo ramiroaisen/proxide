@@ -11,7 +11,7 @@ use std::{
   fmt::Display,
   net::{IpAddr, SocketAddr},
   sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
   },
   time::{Duration, Instant},
@@ -287,23 +287,45 @@ pub async fn serve_http(
         TimeoutIo::new(stream, read_timeout, write_timeout).with_read_gate(read_gate.clone()),
       ));
 
-      let service = service_fn(move |req| async move {
-        let (req, turn) = turn::track(&read_gate, req);
-        let response = match serve_proxy(
-          req,
-          &config,
-          local_addr,
-          remote_addr,
-          proxy_header,
-          HttpBindKind::Http,
-        )
-        .await
-        {
-          Ok(response) => response,
-          Err(e) => e.to_response(),
-        };
+      // the longest reload drain timeout of the apps this connection served
+      // (see `reload_drain_timeout`): how long it may outlive a reload
+      let drain_ms = Arc::new(AtomicU64::new(
+        crate::config::reload_drain_timeout_of(&config, None).as_millis() as u64,
+      ));
 
-        Ok::<_, Infallible>(turn.track(response))
+      let service = service_fn({
+        let drain_ms = drain_ms.clone();
+        move |req| {
+          let drain_ms = drain_ms.clone();
+          async move {
+            if let Ok((host, _)) = crate::proxy::util::resolve_host_port(&req) {
+              let app = crate::proxy::service::resolve_upstream_app(
+                host,
+                &config,
+                local_addr,
+                HttpBindKind::Http,
+              );
+              let drain = crate::config::reload_drain_timeout_of(&config, app);
+              drain_ms.fetch_max(drain.as_millis() as u64, Ordering::Relaxed);
+            }
+            let (req, turn) = turn::track(&read_gate, req);
+            let response = match serve_proxy(
+              req,
+              &config,
+              local_addr,
+              remote_addr,
+              proxy_header,
+              HttpBindKind::Http,
+            )
+            .await
+            {
+              Ok(response) => response,
+              Err(e) => e.to_response(),
+            };
+
+            Ok::<_, Infallible>(turn.track(response))
+          }
+        }
       });
 
       let conn = http
@@ -314,9 +336,31 @@ pub async fn serve_http(
       let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Http);
 
       let guard = connection_start(connection);
+      let instance_cancel = conn_cancel.clone();
       tokio::spawn(async move {
-        if let Err(e) = watched.await {
-          log::warn!("error handling http connection - {e}: {e:?}");
+        // once the instance is cancelled (a reload) the connection is asked
+        // to close (graceful.shutdown, below); one still busy — a live stream
+        // — may keep running for its reload drain timeout, then it is cut.
+        // Without this cut nothing ever ended it: its task outlives the
+        // instance in the same process.
+        let cut = async {
+          instance_cancel.cancelled().await;
+          let drain = Duration::from_millis(drain_ms.load(Ordering::Relaxed));
+          tokio::time::sleep(drain).await;
+          drain
+        };
+        tokio::select! {
+          result = watched => {
+            if let Err(e) = result {
+              log::warn!("error handling http connection - {e}: {e:?}");
+            }
+          }
+          drain = cut => {
+            log::info!(
+              "http connection from {remote_addr} cut {}s after the instance reload (reload_drain_timeout)",
+              drain.as_secs()
+            );
+          }
         }
         drop(guard);
       });
@@ -481,23 +525,45 @@ pub async fn serve_https(
         TimeoutIo::new(tls_stream, read_timeout, write_timeout).with_read_gate(read_gate.clone()),
       ));
 
-      let service = service_fn(move |req| async move {
-        let (req, turn) = turn::track(&read_gate, req);
-        let response = match serve_proxy(
-          req,
-          &config,
-          local_addr,
-          remote_addr,
-          proxy_header,
-          HttpBindKind::Https,
-        )
-        .await
-        {
-          Ok(response) => response,
-          Err(e) => e.to_response(),
-        };
+      // the longest reload drain timeout of the apps this connection served
+      // (see `reload_drain_timeout`): how long it may outlive a reload
+      let drain_ms = Arc::new(AtomicU64::new(
+        crate::config::reload_drain_timeout_of(&config, None).as_millis() as u64,
+      ));
 
-        Ok::<_, Infallible>(turn.track(response))
+      let service = service_fn({
+        let drain_ms = drain_ms.clone();
+        move |req| {
+          let drain_ms = drain_ms.clone();
+          async move {
+            if let Ok((host, _)) = crate::proxy::util::resolve_host_port(&req) {
+              let app = crate::proxy::service::resolve_upstream_app(
+                host,
+                &config,
+                local_addr,
+                HttpBindKind::Https,
+              );
+              let drain = crate::config::reload_drain_timeout_of(&config, app);
+              drain_ms.fetch_max(drain.as_millis() as u64, Ordering::Relaxed);
+            }
+            let (req, turn) = turn::track(&read_gate, req);
+            let response = match serve_proxy(
+              req,
+              &config,
+              local_addr,
+              remote_addr,
+              proxy_header,
+              HttpBindKind::Https,
+            )
+            .await
+            {
+              Ok(response) => response,
+              Err(e) => e.to_response(),
+            };
+
+            Ok::<_, Infallible>(turn.track(response))
+          }
+        }
       });
 
       let conn = http
@@ -509,9 +575,31 @@ pub async fn serve_https(
       let connection = ConnectionItem::new(remote_addr.ip(), ConnectionKind::Https);
 
       let guard = connection_start(connection);
+      let instance_cancel = conn_cancel.clone();
       tokio::spawn(async move {
-        if let Err(e) = watched.await {
-          log::warn!("error handling https connection - {e}: {e:?}");
+        // once the instance is cancelled (a reload) the connection is asked
+        // to close (graceful.shutdown, below); one still busy — a live stream
+        // — may keep running for its reload drain timeout, then it is cut.
+        // Without this cut nothing ever ended it: its task outlives the
+        // instance in the same process.
+        let cut = async {
+          instance_cancel.cancelled().await;
+          let drain = Duration::from_millis(drain_ms.load(Ordering::Relaxed));
+          tokio::time::sleep(drain).await;
+          drain
+        };
+        tokio::select! {
+          result = watched => {
+            if let Err(e) = result {
+              log::warn!("error handling https connection - {e}: {e:?}");
+            }
+          }
+          drain = cut => {
+            log::info!(
+              "https connection from {remote_addr} cut {}s after the instance reload (reload_drain_timeout)",
+              drain.as_secs()
+            );
+          }
         }
         drop(guard);
       });
