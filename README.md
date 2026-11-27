@@ -341,7 +341,30 @@ proxide signal -s terminate           # SIGTERM: exit immediately
 
 **Zero-downtime reload**: on `reload`, proxide loads the new config, binds and validates it, and only then drains the old configuration. If the new config is invalid, the running configuration stays untouched — a broken edit never takes the proxy down.
 
-**Graceful shutdown** waits for in-flight requests to finish, up to `graceful_shutdown_timeout` (settable in the config, or with `--graceful-shutdown-timeout`), then closes whatever remains.
+**Draining** works the same way on a reload and on a graceful shutdown. Idle keep-alive connections close at once. A connection that is still busy (a live audio stream, a long download) keeps running on the old instance for its `reload_drain_timeout` and is then cut. The value is per app, so a streaming app can outlive a reload while everything else moves on quickly:
+
+```yaml
+graceful_shutdown_timeout: 6h   # upper bound for the process to exit on SIGINT
+
+http:
+  reload_drain_timeout: 5m      # default for every app (5 min)
+  apps:
+    - server_names: [ stream.example.com ]
+      reload_drain_timeout: 6h  # the maximum; more is a config error
+```
+
+A connection gets the longest value among the apps it served.
+
+**Graceful shutdown** (SIGINT) stops accepting at once, drains as above, and exits as soon as the last connection is done. `graceful_shutdown_timeout` (in the config, or `--graceful-shutdown-timeout`) is only the upper bound: whatever is still open when it passes is closed. Keep it at least as long as the longest `reload_drain_timeout`, or it cuts first. It does not apply to a reload, whose old connections are bounded only by `reload_drain_timeout`.
+
+### Upgrading the binary without dropping connections
+
+A reload loads a new config, never new code. To run a new binary without cutting anything, start the new processes beside the old ones, then shut the old ones down gracefully. Every listener sets `SO_REUSEPORT`, so old and new processes share the ports and the kernel spreads new connections between them:
+
+1. Start the new processes (same config, same ports). Check that they serve.
+2. Send SIGINT to the old processes. They close their listeners at once, so new connections only reach the new processes, and they drain their connections before exiting.
+
+The process manager must give the old processes more time than `graceful_shutdown_timeout` before it sends SIGKILL. With [r2](https://github.com/ramiroaisen/r2), set `kill_timeout` above it, then upgrade with `r2 scale proxide +N` followed by `r2 scale proxide -N --background`. The `--background` flag sends SIGINT to all of them at once and returns, instead of stopping them one at a time. Connections still in an old process's accept queue at the instant it closes its listener are reset; that window lasts milliseconds.
 
 ### systemd
 
@@ -397,7 +420,7 @@ Useful `start` flags — each also available as an environment variable:
 | `-c, --config` | `PROXIDE_CONFIG` | Config file path (`.yml` / `.yaml` / `.json` / `.toml`) |
 | `-l, --log` | `PROXIDE_LOG` | Log level override |
 | `--chdir` | `PROXIDE_CHDIR` | Change working directory on startup |
-| `--graceful-shutdown-timeout` | `PROXIDE_GRACEFUL_SHUTDOWN_TIMEOUT` | Grace period on shutdown/reload |
+| `--graceful-shutdown-timeout` | `PROXIDE_GRACEFUL_SHUTDOWN_TIMEOUT` | Upper bound for a graceful shutdown (SIGINT); see draining above |
 | `-t, --worker-threads` | `PROXIDE_WORKER_THREADS` | Runtime worker threads |
 
 ## Config file formats
@@ -428,3 +451,5 @@ just coverage       # LLVM coverage report
 ```
 
 Optional Cargo features slim the binary down or extend it: individual compression algorithms (`compression-br`, `compression-zstd`, `compression-gzip`, `compression-deflate`), `serve-static`, `interpolation`, `access-log` / `client-log` / `primary-log`, `jemalloc` (Linux), and compile-time max log levels (`log-info`, `log-off`, …). The `full` feature (default) enables the standard production set.
+
+`server-tcp-nodelay` is **not** part of `full`, and production builds should enable it. It sets `TCP_NODELAY` on the client connections proxide accepts. Without it, Nagle's algorithm holds the first HTTP response of every new TLS 1.3 connection behind the session tickets until the client's delayed ACK arrives, which adds one round trip plus about 40 ms. The release script (`release/script/release.mjs`) enables it by default (`SERVER_TCP_NODELAY=1`). Upstream connections have their own `proxy_tcp_nodelay` config option.
